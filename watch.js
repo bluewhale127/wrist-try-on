@@ -13,7 +13,6 @@ export function makeSampleWatch() {
   const darkMetal = new THREE.MeshStandardMaterial({ color: 0x3b4e57, metalness: 0.86, roughness: 0.3 });
   const dial = new THREE.MeshStandardMaterial({ color: 0x102f37, metalness: 0.25, roughness: 0.38 });
   const bright = new THREE.MeshStandardMaterial({ color: 0xd1eee4, metalness: 0.3, roughness: 0.3 });
-  const strap = new THREE.MeshStandardMaterial({ color: 0x19262c, roughness: 0.84, metalness: 0.08 });
   group.add(cylinder(0.5, 0.16, metal, 0.055));
   group.add(cylinder(0.455, 0.03, darkMetal, 0.146));
   group.add(cylinder(0.409, 0.012, dial, 0.164));
@@ -31,35 +30,13 @@ export function makeSampleWatch() {
     hand.position.set(0, length * 0.37, z); pivot.add(hand); group.add(pivot);
   }
   group.add(cylinder(0.031, 0.022, metal, 0.21));
-  // Bracelet curves around the wrist; +Y points towards 12 o'clock in model space.
-  const vertices = [], indices = [];
-  const segments = 64;
-  for (let i = 0; i <= segments; i++) {
-    const angle = 0.67 + (Math.PI * 2 - 1.34) * i / segments;
-    for (const [x, expansion] of [[-0.19, 0], [0.19, 0], [-0.19, 0.045], [0.19, 0.045]]) {
-      vertices.push(x, Math.sin(angle) * (0.87 + expansion), Math.cos(angle) * (0.55 + expansion) - 0.48);
-    }
-    if (i < segments) for (const [a, b] of [[0, 1], [1, 3], [3, 2], [2, 0]]) {
-      const k = i * 4; indices.push(k + a, k + b, k + a + 4, k + b, k + b + 4, k + a + 4);
-    }
-  }
-  const geometry = new THREE.BufferGeometry(); geometry.setAttribute('position', new THREE.Float32BufferAttribute(vertices, 3)); geometry.setIndex(indices); geometry.computeVertexNormals();
-  strap.side = THREE.DoubleSide;
-  group.add(new THREE.Mesh(geometry, strap));
   for (const sign of [-1, 1]) for (const x of [-0.205, 0.205]) {
     const lug = new THREE.Mesh(new THREE.BoxGeometry(0.07, 0.20, 0.1), metal); lug.position.set(x, sign * 0.48, 0.025); group.add(lug);
   }
+  // Put the case back on Z=0. WristRig creates the fitted bracelet separately.
+  for (const child of group.children) child.position.z += 0.025;
   group.userData.sample = true;
   return group;
-}
-
-export function makeOccluder() {
-  const material = new THREE.MeshBasicMaterial({ colorWrite: false, depthWrite: true, side: THREE.DoubleSide });
-  const mesh = new THREE.Mesh(new THREE.CylinderGeometry(1, 1, 5, 48), material);
-  mesh.scale.set(0.83, 1, 0.47);
-  mesh.position.z = -0.46;
-  mesh.renderOrder = -10;
-  return mesh;
 }
 
 export function disposeModel(root) {

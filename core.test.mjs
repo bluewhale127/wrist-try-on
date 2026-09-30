@@ -5,6 +5,7 @@ import { Quaternion, Vector3 } from './vendor/three/three.module.js';
 import { palmTemplate, fitPalmProjection } from './palm-projection.js';
 import { HandTarget } from './hand-target.js';
 import { inspectGLB } from './watch.js';
+import { WristRig, wristDimensions, fitStrapPositions } from './wrist-rig.js';
 
 const view = { videoWidth: 1280, videoHeight: 720, width: 400, height: 600 };
 const landmarks = Array.from({ length: 21 }, () => ({ x: 0.5, y: 0.5, z: 0 }));
@@ -323,13 +324,17 @@ test('brief gaps are held, a missing hand expires, and reacquisition resets', ()
 test('an isolated position jump is rejected, real sustained movement is reacquired', () => {
   const tracker = new WristPoseTracker(), pose = estimateWristPose(landmarks, view);
   tracker.update(pose, 0);
-  const bad = { ...pose, position: pose.position.clone().add(new Vector3(800, 0, 0)) };
+  const bad = { ...pose, position: pose.position.clone().add(new Vector3(pose.size*0.8, 0, 0)) };
   assert.equal(tracker.update(bad, 33), false);
   assert.equal(tracker.sample(33).position.distanceTo(pose.position), 0);
   assert.equal(tracker.update(pose, 66), true);
   assert.equal(tracker.update(bad, 99), false);
-  assert.equal(tracker.update(bad, 132), true);
-  assert.ok(tracker.sample(132).position.x > pose.position.x + 400);
+  assert.equal(tracker.update(bad, 132), false);
+  assert.equal(tracker.update(bad, 165), true);
+  assert.ok(tracker.sample(165).position.x > pose.position.x);
+  assert.ok(tracker.sample(165).position.x < pose.position.x+pose.size*0.4);
+  for(let t=198;t<=594;t+=33)tracker.update(bad,t);
+  assert.ok(tracker.pose.position.distanceTo(bad.position)<pose.size*0.05);
 });
 
 test('adaptive position filter reduces stationary jitter without lagging sustained motion', () => {
@@ -345,6 +350,75 @@ test('adaptive position filter reduces stationary jitter without lagging sustain
     tracker.update({ ...pose, position: pose.position.clone().add(new Vector3(i * 12, 0, 0)) }, (90 + i) * 33);
   }
   assert.ok(Math.abs(tracker.pose.position.x - pose.position.x - 348) < 15);
+});
+
+test('one-frame moderate position and rotation spikes cannot kick the watch',()=>{
+  const tracker=calibratedTracker(), base=tracker.pose.position.clone(), size=tracker.pose.size;
+  const bad=rotationPose(0.65);bad.position.add(new Vector3(size*0.5,0,0));
+  assert.equal(tracker.update(bad,66),false);
+  assert.ok(tracker.pose.position.distanceTo(base)<1e-8);
+  assert.ok(tracker.pose.rotation.angleTo(rotationPose(0).rotation)<0.01);
+  tracker.update(rotationPose(0),132);
+  assert.ok(tracker.sample(132));assert.ok(tracker.pose.position.distanceTo(base)<1e-8);
+});
+test('bad geometry holds the entire pose instead of mixing in its raw scale and anchor',()=>{
+  const tracker=calibratedTracker(), before={position:tracker.pose.position.clone(),size:tracker.pose.size,radius:tracker.pose.wristRadius};
+  const hand=rotatedHand(0);hand.landmarks[9].y+=0.45;
+  const bad=estimateWristPose(hand.landmarks,rotationView,{worldLandmarks:hand.world});
+  for(const t of [66,132,198])assert.equal(tracker.update(bad,t),false);
+  assert.equal(tracker.pose.size,before.size);assert.equal(tracker.pose.wristRadius,before.radius);
+  assert.ok(tracker.pose.position.distanceTo(before.position)<1e-8);assert.equal(tracker.sample(221),null);
+});
+test('a depth-angle spike cannot boost its own visible rotation step',()=>{
+  const tracker=calibratedTracker();tracker.update(rotationPose(0.95),66);
+  assert.ok(tracker.pose.rotation.angleTo(rotationPose(0).rotation)<0.21);
+  for(let t=132;t<=330;t+=66)tracker.update(rotationPose(0),t);
+  assert.ok(tracker.sample(330));assert.ok(tracker.pose.rotation.angleTo(rotationPose(0).rotation)<0.03);
+});
+test('continuous rotation at phone inference cadence stays visible and follows both directions',()=>{
+  for(const sign of [-1,1]){
+    const tracker=calibratedTracker();
+    for(let t=66;t<=2640;t+=66){
+      const angle=sign*t/1000*1.5;tracker.update(rotationPose(angle),t);
+      assert.ok(tracker.sample(t),`visible at ${t}`);
+      assert.ok(tracker.pose.rotation.angleTo(rotationPose(angle).rotation)<0.2);
+    }
+  }
+});
+test('one wrist cylinder defines case contact and fitted strap across watch sizes',()=>{
+  const dimensions=wristDimensions(100), rig=new WristRig();
+  rig.caseMount.rotation.z=Math.PI/2;
+  for(const caseSize of [36,65,105]){
+    rig.fit({...dimensions,caseSize,sample:true});
+    assert.equal(rig.caseMount.position.z,dimensions.radiusZ);
+    assert.equal(rig.occluder.position.length(),0);
+    assert.equal(rig.occluder.scale.x,dimensions.radiusX);
+    assert.equal(rig.occluder.scale.z,dimensions.radiusZ);
+    const points=rig.strap.geometry.attributes.position.array, factor=rig.strap.scale.x, clearance=0.012*caseSize;
+    for(let i=12;i<=68;i++)for(let j=0;j<2;j++){
+      const k=i*12+j*3,x=points[k]*factor,z=points[k+2]*factor;
+      assert.ok(Math.abs((x/(dimensions.radiusX+clearance))**2+(z/(dimensions.radiusZ+clearance))**2-1)<1e-5);
+    }
+    const start=new Vector3().fromArray(points,0).add(new Vector3().fromArray(points,3)).multiplyScalar(factor/2);
+    const lug=new Vector3(0,-0.56,0.015).applyQuaternion(rig.caseMount.quaternion).multiplyScalar(caseSize).add(new Vector3(0,0,dimensions.radiusZ));
+    assert.ok(start.distanceTo(lug)<1e-5);
+  }
+  rig.fit({...dimensions,caseSize:65,sample:false,guide:true});
+  assert.equal(rig.strap.visible,false);assert.equal(rig.guide.visible,true);
+});
+test('wrist width/depth adjustments preserve a finite strap attached to tilted case lugs',()=>{
+  const points=new Float32Array(81*12);
+  for(const width of [0.65,1,1.45])for(const depth of [0.6,1,1.5]){
+    const dimensions=wristDimensions(100,width,depth);
+    const q=new Quaternion().setFromAxisAngle(new Vector3(1,2,3).normalize(),1.2);
+    fitStrapPositions(points,{...dimensions,caseSize:65,caseRotation:q,lift:4});
+    assert.ok([...points].every(Number.isFinite));
+    const a=new Vector3().fromArray(points,0).add(new Vector3().fromArray(points,3)).multiplyScalar(0.5);
+    const b=new Vector3().fromArray(points,960).add(new Vector3().fromArray(points,963)).multiplyScalar(0.5);
+    const ends=[-1,1].map(sign=>new Vector3(0,sign*0.56,0.015).applyQuaternion(q).multiplyScalar(65).add(new Vector3(0,0,dimensions.radiusZ+4)));
+    assert.ok(Math.min(a.distanceTo(ends[0]),a.distanceTo(ends[1]))<1e-5);
+    assert.ok(Math.min(b.distanceTo(ends[0]),b.distanceTo(ends[1]))<1e-5);
+  }
 });
 function glb(json) {
   let text = JSON.stringify(json); text += ' '.repeat((4 - new TextEncoder().encode(text).length % 4) % 4);

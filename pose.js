@@ -106,6 +106,7 @@ export class WristPoseTracker {
   reset() {
     this.pose = null; this.previous = null; this.lastGood = -Infinity; this.speed = 0;
     this.velocity = new Vector3(); this.pending = null; this.pendingRotation = null;
+    this.motionVelocity = new Vector3(); this.pendingPose = null;
     this.orientationSign = 0; this.angularSpeed = 0; this.reference = null; this.referenceFrames = 0;
     this.referenceStarted = 0; this.referenceTime = -Infinity; this.templates = []; this.template = null;
     this.calibrationRotation = null; this.calibrationHeading = 0;
@@ -151,6 +152,7 @@ export class WristPoseTracker {
     if (predicted && speed > 0.01) predicted.premultiply(new Quaternion().setFromAxisAngle(this.rotationVelocity.clone().normalize(), speed * Math.min(age, 100) / 1000));
     const score = q => predicted ? q.angleTo(predicted) + 0.12*q.angleTo(raw) : this.previousRotation ? q.angleTo(recoveryReference) : q.angleTo(raw);
     let rotation = score(candidates[0]) <= score(candidates[1]) ? candidates[0] : candidates[1];
+    let branchConfirmed = false;
     const rawChoice = candidates[0].angleTo(raw) <= candidates[1].angleTo(raw) ? candidates[0] : candidates[1];
     // At a frontal turning point both depth solutions meet. Motion prediction
     // alone would force continued rotation when the user actually reverses.
@@ -159,13 +161,13 @@ export class WristPoseTracker {
       if (!this.branchEvidence || time-this.branchEvidence.time > 160 || this.branchEvidence.rotation.angleTo(rawChoice) > 0.3) {
         this.branchEvidence = { rotation: rawChoice.clone(), started: time, time, count: 1 };
       } else { this.branchEvidence.rotation.copy(rawChoice); this.branchEvidence.time = time; this.branchEvidence.count++; }
-      if (this.branchEvidence.count >= 3 && time-this.branchEvidence.started >= 100 && rawChoice.angleTo(previous) < 0.7) rotation = rawChoice;
+      if (this.branchEvidence.count >= 3 && time-this.branchEvidence.started >= 100 && rawChoice.angleTo(previous) < 0.7) { rotation = rawChoice; branchConfirmed = true; }
     } else this.branchEvidence = null;
     const quality = Math.exp(-((projection.residual/0.07)**2));
     const disagreement = rotation.angleTo(raw);
     this.diagnostics = { state: quality < 0.35 ? 'uncertain' : disagreement > 0.6 ? 'corrected' : 'tracking',
       quality, progress: 1, residual: projection.residual, disagreement, rawNormalZ: Z.clone().applyQuaternion(raw).z,
-      fittedNormalZ: projection.normalZ*this.orientationSign, memoryAgeMs: Number.isFinite(age) ? age : null };
+      fittedNormalZ: projection.normalZ*this.orientationSign, memoryAgeMs: Number.isFinite(age) ? age : null, branchConfirmed };
     if (quality < 0.35) { this.recovery = null; this.branchEvidence = null; return null; }
     if (this.previousRotation && age > 220) {
       const longGap = age > 1500;
@@ -205,46 +207,75 @@ export class WristPoseTracker {
   }
   update(next, time) {
     if (!Number.isFinite(time) || time <= this.lastInput) return false;
+    const frameDt = clamp((time-this.lastInput)/1000, 0.001, 0.1);
     this.lastInput = time;
     if (!next) { this.branchEvidence = null; this.diagnostics = { state: 'missing', quality: 0, progress: this.orientationSign ? 1 : 0 }; return false; }
     next = { ...next };
     const oriented = this.orientedRotation(next, time);
+    // A failed rotation fit also makes its inferred scale/anchor untrustworthy.
+    // Hold the complete last pose rather than mixing a new raw size/position
+    // with an old rotation during the 220ms display grace period.
+    if (this.orientationSign && !oriented) return false;
     if (!this.pose || time - this.lastGood > 250) {
       this.pose = { ...next, position: next.position.clone(), rotation: next.rotation.clone() };
       this.pose.rotation.copy(oriented || this.previousRotation || new Quaternion().setFromAxisAngle(Z, next.heading));
       if (oriented) this.acceptRotation(oriented, time);
       this.previous = next.position.clone(); this.lastGood = time; this.speed = 0; this.velocity.set(0, 0, 0); this.pending = null;
+      this.motionVelocity.set(0, 0, 0); this.pendingPose = null;
       this.pendingRotation = null; this.angularSpeed = 0;
       return true;
     }
     const dt = clamp((time - this.lastGood) / 1000, 0.001, 0.25);
-    const distance = next.position.distanceTo(this.pose.position) / this.pose.size;
-    const ratio = next.size / this.pose.size;
-    const jump = distance > 0.65 + dt * 9 || ratio > 1.65 || ratio < 0.6;
-    if (jump && (!this.pending || next.position.distanceTo(this.pending.position) > next.size * 0.6 || Math.abs(Math.log(next.size / this.pending.size)) > 0.25)) {
-      this.pending = next; return false;
+    const bodySize = Math.max(this.pose.wristRadius / 0.46, 1);
+    const predicted = this.previous.clone().addScaledVector(this.motionVelocity, Math.min(dt, 0.12));
+    const innovation = next.position.distanceTo(predicted) / bodySize;
+    const radiusChange = Math.abs(Math.log(next.wristRadius / this.pose.wristRadius));
+    let rotationInnovation = 0;
+    if (oriented && this.previousRotation) {
+      const predictedRotation = this.previousRotation.clone(), rate = this.rotationVelocity.length();
+      if (rate > 0.001) predictedRotation.premultiply(new Quaternion().setFromAxisAngle(this.rotationVelocity.clone().normalize(), rate * Math.min(dt, 0.1)));
+      rotationInnovation = oriented.angleTo(predictedRotation);
     }
-    this.pending = null;
+    const jump = innovation > 0.35 + Math.min(dt, 0.1) + this.motionVelocity.length()*dt/bodySize*0.3 || radiusChange > 0.12 + dt*0.5;
+    this.diagnostics.innovation = { position: innovation, rotation: rotationInnovation, radius: radiusChange };
+    if (jump) {
+      const pending = this.pendingPose;
+      const consistent = pending && time-pending.time < 180 && next.position.distanceTo(pending.position) < bodySize*(0.7+dt*6) && Math.abs(Math.log(next.wristRadius/pending.radius)) < 0.25 && (!oriented || !pending.rotation || oriented.angleTo(pending.rotation) < 0.45+dt*5);
+      this.pendingPose = { position: next.position.clone(), radius: next.wristRadius, rotation: oriented?.clone(), time, started: consistent ? pending.started : time, count: consistent ? pending.count+1 : 1 };
+      if (this.pendingPose.count < 2 || time-this.pendingPose.started < 50) { this.diagnostics.state = 'outlier'; return false; }
+      this.motionVelocity.set(0, 0, 0);
+    }
+    this.pendingPose = null;
+    if (oriented && this.previousRotation && this.previousRotation.angleTo(oriented) > 1.3+dt*4 && (!this.pendingRotation || this.pendingRotation.angleTo(oriented) > 0.45)) {
+      this.pendingRotation = oriented.clone(); this.diagnostics.state = 'outlier'; return false;
+    }
+    this.pendingRotation = null;
+    const ratio = next.size / this.pose.size;
+    const positionRateLimit = 3 + Math.min(8, this.motionVelocity.length()/bodySize*1.2);
+    const motion = next.position.clone().sub(this.previous).multiplyScalar(1 / dt);
+    if (motion.length() > bodySize*10) motion.setLength(bodySize*10);
+    this.motionVelocity.lerp(motion, cutoffAlpha(dt, 3));
     const velocity = next.position.clone().sub(this.previous).multiplyScalar(1 / dt / Math.max(next.size, 1));
     this.velocity.lerp(velocity, cutoffAlpha(dt, 1.5));
     this.speed = this.velocity.length();
-    this.pose.position.lerp(next.position, cutoffAlpha(dt, 1.6 + 3.5 * this.speed));
+    const filteredPosition = this.pose.position.clone().lerp(next.position, cutoffAlpha(dt, 1.6 + 3.5 * this.speed));
+    const step = filteredPosition.sub(this.pose.position);
+    if (step.length() > bodySize*positionRateLimit*frameDt) step.setLength(bodySize*positionRateLimit*frameDt);
+    this.pose.position.add(step);
     const sizeAlpha = cutoffAlpha(dt, 1.2 + this.speed * 0.6);
     this.pose.size = Math.exp(Math.log(this.pose.size) + sizeAlpha * Math.log(ratio));
     this.pose.wristRadius += (next.wristRadius - this.pose.wristRadius) * sizeAlpha;
     if (oriented) {
       const angle = this.pose.rotation.angleTo(oriented);
-      const jump = angle > 1.3 + dt * 4;
-      if (jump && (!this.pendingRotation || this.pendingRotation.angleTo(oriented) > 0.45)) {
-        this.pendingRotation = oriented;
-        this.diagnostics.state = 'uncertain';
-      } else {
-        this.pendingRotation = null;
-        this.angularSpeed += cutoffAlpha(dt, 2) * (Math.min(angle / dt, 12) - this.angularSpeed);
-        this.pose.rotation.slerp(oriented, cutoffAlpha(dt, 2 + this.angularSpeed * 0.8));
-        if (time-this.lastRotationGood > 220) this.pose.rotation.copy(oriented);
-        this.acceptRotation(oriented, time);
-      }
+      const measured = this.previousRotation ? this.previousRotation.angleTo(oriented) : angle;
+      this.angularSpeed += cutoffAlpha(dt, 2) * (Math.min(measured / dt, 12) - this.angularSpeed);
+      // Bound one visible step using motion already observed before this frame.
+      // A single noisy angle must not instantly boost its own response speed.
+      const filtered = this.pose.rotation.clone().slerp(oriented, cutoffAlpha(dt, 1.6 + this.angularSpeed * 0.65));
+      const rateLimit = Math.min(6.5, 3 + this.rotationVelocity.length()*1.2);
+      this.pose.rotation.rotateTowards(filtered, rateLimit*frameDt);
+      if (time-this.lastRotationGood > 220) this.pose.rotation.copy(oriented);
+      this.acceptRotation(oriented, time);
     }
     this.previous.copy(next.position); this.lastGood = time;
     return true;

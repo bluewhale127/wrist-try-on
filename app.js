@@ -2,15 +2,16 @@ import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { DRACOLoader } from 'three/addons/loaders/DRACOLoader.js';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
-import { estimateWristPose, landmarkPoint, WristPoseTracker, smoothingAlpha, wristSurfacePosition } from './pose.js?v=5';
+import { estimateWristPose, landmarkPoint, WristPoseTracker, smoothingAlpha } from './pose.js?v=6';
 import { HandDetector } from './hand-detector.js?v=5';
 import { HandTarget } from './hand-target.js?v=5';
-import { makeSampleWatch, makeOccluder, disposeModel, inspectGLB } from './watch.js';
+import { makeSampleWatch, disposeModel, inspectGLB } from './watch.js?v=6';
+import { WristRig, wristDimensions } from './wrist-rig.js?v=6';
 
 const $ = id => document.getElementById(id);
 const video = $('camera'), stage = $('stage'), status = $('status'), errorBox = $('error');
-const controls = ['scale', 'offset', 'rotation', 'tilt-x', 'tilt-y', 'height'];
-const defaults = { scale: 1, offset: 0.38, rotation: 90, 'tilt-x': 0, 'tilt-y': 0, height: 0 };
+const controls = ['scale', 'offset', 'rotation', 'tilt-x', 'tilt-y', 'height', 'wrist-width', 'wrist-depth'];
+const defaults = { scale: 1, offset: 0.38, rotation: 90, 'tilt-x': 0, 'tilt-y': 0, height: 0, 'wrist-width': 1, 'wrist-depth': 1 };
 let renderer, scene, camera, anchor, adjustment, occluder, watch;
 let mediaStream = null, mode = 'idle', operation = 0, facingMode = 'environment', mirror = false;
 let handLandmarker = null, detectorPromise = null;
@@ -19,7 +20,7 @@ const handTarget = new HandTarget();
 const debugCanvas = $('tracking-debug'), debugContext = debugCanvas.getContext('2d');
 let debugFrame = null, diagnosticRecords = [];
 const renderCenter = new THREE.Vector3();
-let renderRadius = 0;
+let renderRadius = 0, renderSize = 0;
 let poseInitialized = false, lastDetection = 0, lastVideoTime = -1, detecting = false;
 let width = 1, height = 1, animationId, previousFrame = performance.now();
 let fpsStart = 0, detections = 0, modelOperation = 0;
@@ -36,16 +37,16 @@ function fit() {
 function updateFit() {
   const values = fit();
   for (const id of controls) {
-    $(id + '-output').value = id === 'scale' ? `${Math.round(values[id] * 100)}%` : id === 'offset' ? (Math.abs(values[id] - defaults[id]) < 0.005 ? '기본' : `${Math.round(values[id] * 100)}`) : id === 'height' ? values[id].toFixed(2) : `${values[id]}°`;
+    $(id + '-output').value = id === 'scale' || id.startsWith('wrist-') ? `${Math.round(values[id] * 100)}%` : id === 'offset' ? (Math.abs(values[id] - defaults[id]) < 0.005 ? '기본' : `${Math.round(values[id] * 100)}`) : id === 'height' ? values[id].toFixed(2) : `${values[id]}°`;
   }
   if (adjustment) {
     adjustment.rotation.set(THREE.MathUtils.degToRad(values['tilt-x']), THREE.MathUtils.degToRad(values['tilt-y']), THREE.MathUtils.degToRad(values.rotation), 'ZYX');
-    adjustment.position.z = values.height;
   }
 }
 function resetFit() {
   for (const id of controls) $(id).value = defaults[id];
   $('occlusion').checked = true;
+  $('wrist-guide').checked = false;
   updateFit();
 }
 function updateMode(next) {
@@ -144,16 +145,17 @@ async function detect(time) {
     const landmarks = selected === null ? null : result.landmarks[selected];
     const worldLandmarks = selected === null ? null : result.worldLandmarks?.[selected];
     const next = estimateWristPose(landmarks, view, { mirror, offset: values.offset, scale: values.scale, worldLandmarks });
-    if (tracker.update(next, time)) {
+    const accepted = tracker.update(next, time);
+    if (accepted || ['uncertain','reorient','reacquiring','outlier'].includes(tracker.diagnostics.state)) {
       const diagnostic = tracker.diagnostics;
-      $('tracking-label').textContent = !tracker.orientationSign ? `손등을 펴고 잠깐 유지해 주세요 · ${Math.round(diagnostic.progress*100)}%` : diagnostic.state === 'reorient' ? '손등을 카메라 쪽으로 펴 주세요 · 방향 복구 중' : diagnostic.state === 'reacquiring' ? '기존 손의 회전을 다시 확인하고 있어요' : diagnostic.state === 'uncertain' ? '회전을 다시 확인하고 있어요' : diagnostic.state === 'corrected' ? '화면의 손 모양으로 회전을 보정하고 있어요' : '손목 회전을 따라가고 있어요';
+      $('tracking-label').textContent = !tracker.orientationSign ? `손등을 펴고 잠깐 유지해 주세요 · ${Math.round(diagnostic.progress*100)}%` : diagnostic.state === 'reorient' ? '손등을 카메라 쪽으로 펴 주세요 · 방향 복구 중' : diagnostic.state === 'reacquiring' ? '기존 손의 회전을 다시 확인하고 있어요' : ['uncertain','outlier'].includes(diagnostic.state) ? '손목 움직임을 다시 확인하고 있어요' : diagnostic.state === 'corrected' ? '화면의 손 모양으로 회전을 보정하고 있어요' : '손목 회전을 따라가고 있어요';
     } else {
       $('tracking-label').textContent = handTarget.state === 'lost' ? '같은 손을 원래 위치로 · 계속 안 잡히면 손등 기준 맞추기' : tracker.sample(completed) ? '손목을 다시 확인하고 있어요' : '손등과 손가락, 손목을 보여 주세요';
     }
     debugFrame = { next, landmarks, time };
     if ($('debug').checked) {
       const d = tracker.diagnostics;
-      $('debug-info').textContent = `상태: ${{calibrating:'기준 설정',tracking:'추적',corrected:'기울기 보정',uncertain:'불확실',missing:'손 없음',reorient:'손등으로 방향 복구',reacquiring:'회전 재확인'}[d.state]} · 배치 일치도 ${Math.round(d.quality*100)}%\n대상: ${handTarget.state} · 검출 ${result.landmarks?.length || 0}개\n프레임 처리 ${Math.round(completed-time)}ms · ${handLandmarker.backend}\n일치도는 실제 정확도 점수가 아닙니다.`;
+      $('debug-info').textContent = `상태: ${{calibrating:'기준 설정',tracking:'추적',corrected:'기울기 보정',uncertain:'불확실',missing:'손 없음',reorient:'손등으로 방향 복구',reacquiring:'회전 재확인',outlier:'순간 튐 확인'}[d.state]} · 배치 일치도 ${Math.round(d.quality*100)}%\n대상: ${handTarget.state} · 검출 ${result.landmarks?.length || 0}개\n프레임 처리 ${Math.round(completed-time)}ms · ${handLandmarker.backend}\n일치도는 실제 정확도 점수가 아닙니다.`;
       diagnosticRecords.push({ time, elapsed: completed-time, inferenceMs: elapsed, backend: handLandmarker.backend,
         view:{width,height,videoWidth:video.videoWidth,videoHeight:video.videoHeight}, mirror, fit:values,
         landmarks,worldLandmarks,handedness:selected === null ? null : result.handedness?.[selected],
@@ -171,13 +173,15 @@ function render(time) {
   if (!renderer || document.hidden) return;
   const dt = (time - previousFrame) / 1000;
   previousFrame = time;
+  const values = fit();
   if (mode === 'live') {
     void detect(time);
   }
   if (mode === 'idle') {
     anchor.visible = true;
     anchor.position.set(0, 2, 0);
-    anchor.scale.setScalar(Math.min(width * 0.49, height * 0.35) * Number($('scale').value));
+    const baseSize = Math.min(width * 0.49, height * 0.35);
+    anchor.fit({ ...wristDimensions(baseSize / 0.65, values['wrist-width'], values['wrist-depth']), caseSize: baseSize * values.scale, height: values.height, sample: !!watch.userData.sample, guide: $('wrist-guide').checked });
     anchor.rotation.set(0.2, reduceMotion ? -0.25 : Math.sin(time * 0.0003) * 0.25 - 0.15, -0.08);
     occluder.visible = false;
   } else {
@@ -188,12 +192,10 @@ function render(time) {
       const alpha = poseInitialized ? smoothingAlpha(dt, 40) : 1;
       renderCenter.lerp(targetPose.position, alpha);
       renderRadius += (targetPose.wristRadius - renderRadius) * alpha;
+      renderSize += (targetPose.size - renderSize) * alpha;
       anchor.quaternion.copy(targetPose.rotation);
-      anchor.scale.lerp(new THREE.Vector3().setScalar(targetPose.size), alpha);
-      anchor.position.copy(wristSurfacePosition(renderCenter, anchor.quaternion, renderRadius));
-      const wristRatio = renderRadius / (0.46 * anchor.scale.x);
-      occluder.scale.set(0.83 * wristRatio, wristRatio, 0.47 * wristRatio);
-      occluder.position.z = -0.46 * wristRatio;
+      anchor.position.copy(renderCenter);
+      anchor.fit({ ...wristDimensions(renderRadius / (0.65 * 0.46), values['wrist-width'], values['wrist-depth']), caseSize: renderSize, height: values.height, sample: !!watch.userData.sample, guide: $('wrist-guide').checked });
       poseInitialized = true;
     } else poseInitialized = false;
     occluder.visible = $('occlusion').checked;
@@ -257,7 +259,7 @@ async function importModel(file) {
     resetFit();
     $('model-name').textContent = file.name.replace(/\.glb$/i, '');
     $('model-caption').textContent = `${(file.size / 1024 / 1024).toFixed(1)} MB · 내 시계 모델`;
-    $('model-status').textContent = '불러왔습니다. 크기와 방향을 맞춰 주세요.';
+    $('model-status').textContent = '불러왔습니다. 손목 모형으로 위치를 맞출 수 있어요. GLB의 스트랩 형태는 그대로 유지됩니다.';
   } catch (error) {
     if (loaded) disposeModel(loaded);
     if (id === modelOperation) $('model-status').textContent = error.message || '모델을 불러오지 못했습니다. GLB 내보내기 설정을 확인해 주세요.';
@@ -276,8 +278,8 @@ try {
   const fill = new THREE.DirectionalLight(0xa2e8e2, 2); fill.position.set(400, -200, 500); scene.add(fill);
   const pmrem = new THREE.PMREMGenerator(renderer), room = new RoomEnvironment();
   const environment = pmrem.fromScene(room, 0.04); scene.environment = environment.texture; pmrem.dispose(); room.dispose();
-  anchor = new THREE.Group(); adjustment = new THREE.Group(); occluder = makeOccluder();
-  anchor.add(occluder, adjustment); scene.add(anchor); replaceModel(makeSampleWatch()); updateFit();
+  anchor = new WristRig(); adjustment = anchor.caseMount; occluder = anchor.occluder;
+  scene.add(anchor); replaceModel(makeSampleWatch()); updateFit();
   new ResizeObserver(() => {
     ({ width, height } = stage.getBoundingClientRect());
     renderer.setSize(width, height, false);
@@ -298,7 +300,7 @@ $('calibrate').addEventListener('click', () => {
 });
 $('save-diagnostics').addEventListener('click',()=>{
   if(!diagnosticRecords.length)return;
-  const blob=new Blob([JSON.stringify({version:'0.5',recordedAt:new Date().toISOString(),frames:diagnosticRecords})],{type:'application/json'});
+  const blob=new Blob([JSON.stringify({version:'0.6',recordedAt:new Date().toISOString(),frames:diagnosticRecords})],{type:'application/json'});
   const url=URL.createObjectURL(blob), link=document.createElement('a');link.href=url;link.download='wrist-diagnostics.json';link.click();setTimeout(()=>URL.revokeObjectURL(url),1000);
 });
 $('start').addEventListener('click', () => mode === 'idle' ? startCamera() : stopCamera());
