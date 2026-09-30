@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { DRACOLoader } from 'three/addons/loaders/DRACOLoader.js';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
-import { estimateWristPose, WristPoseTracker, smoothingAlpha } from './pose.js?v=2';
+import { estimateWristPose, WristPoseTracker, smoothingAlpha, wristSurfacePosition } from './pose.js?v=3';
 import { HandDetector } from './hand-detector.js?v=2';
 import { makeSampleWatch, makeOccluder, disposeModel, inspectGLB } from './watch.js';
 
@@ -14,6 +14,8 @@ let renderer, scene, camera, anchor, adjustment, occluder, watch;
 let mediaStream = null, mode = 'idle', operation = 0, facingMode = 'environment', mirror = false;
 let handLandmarker = null, detectorPromise = null;
 const tracker = new WristPoseTracker();
+const renderCenter = new THREE.Vector3();
+let renderRadius = 0;
 let poseInitialized = false, lastDetection = 0, lastVideoTime = -1, detecting = false;
 let width = 1, height = 1, animationId, previousFrame = performance.now();
 let fpsStart = 0, detections = 0, modelOperation = 0;
@@ -49,6 +51,7 @@ function updateMode(next) {
   $('mode-label').textContent = next === 'idle' ? '3D 미리보기' : '실시간 착용';
   $('start').textContent = next === 'idle' ? '카메라 시작' : next === 'loading' ? '준비 취소' : '카메라 끄기';
   $('switch').disabled = next !== 'live';
+  $('calibrate').disabled = next !== 'live';
   $('camera-label').textContent = next === 'idle' ? '카메라 꺼짐' : next === 'loading' ? '준비 중' : mirror ? '전면 카메라' : '후면 카메라';
   $('tracking-label').textContent = next === 'idle' ? '3D 미리보기 · 카메라 꺼짐' : next === 'loading' ? '손 추적을 준비하고 있어요' : '손등과 손가락, 손목을 보여 주세요';
   $('fps').textContent = '';
@@ -102,7 +105,7 @@ async function startCamera() {
     }, { once: true });
     lastVideoTime = -1; lastDetection = 0; fpsStart = performance.now(); detections = 0;
     updateMode('live');
-    notice('손등이 카메라를 향하도록 하고, 손가락과 손목을 함께 보여 주세요. 크기는 슬라이더로 맞출 수 있어요.');
+    notice('처음에는 손등을 카메라에 보여 주세요. 방향이 반대로 붙으면 손등을 보인 상태에서 손등 기준 맞추기를 눌러 주세요.');
   } catch (error) {
     if (id !== operation) { acquired?.getTracks().forEach(t => t.stop()); return; }
     stopCamera();
@@ -131,8 +134,8 @@ async function detect(time) {
     const values = fit();
     const next = estimateWristPose(result.landmarks?.[0], { width, height, videoWidth: video.videoWidth, videoHeight: video.videoHeight }, { mirror, offset: values.offset, scale: values.scale, worldLandmarks: result.worldLandmarks?.[0] });
     if (tracker.update(next, completed)) {
-      $('tracking-label').textContent = '손목을 따라 시계를 맞추고 있어요';
-      stage.classList.add('tracked');
+      const normalZ = new THREE.Vector3(0, 0, 1).applyQuaternion(tracker.pose.rotation).z;
+      $('tracking-label').textContent = !tracker.orientationSign ? '처음에는 손등을 카메라에 보여 주세요' : normalZ < -0.25 ? '손바닥 방향 · 시계는 손목 뒤쪽' : '손목을 돌리는 방향을 따라가고 있어요';
     } else {
       $('tracking-label').textContent = tracker.sample(completed) ? '손목을 다시 확인하고 있어요' : '손등과 손가락, 손목을 보여 주세요';
     }
@@ -156,13 +159,18 @@ function render(time) {
     occluder.visible = false;
   } else {
     const targetPose = tracker.sample(time);
-    anchor.visible = mode === 'live' && !!targetPose;
+    anchor.visible = mode === 'live' && !!targetPose && !!tracker.orientationSign;
     stage.classList.toggle('tracked', anchor.visible);
     if (anchor.visible) {
       const alpha = poseInitialized ? smoothingAlpha(dt, 40) : 1;
-      anchor.position.lerp(targetPose.position, alpha);
+      renderCenter.lerp(targetPose.position, alpha);
+      renderRadius += (targetPose.wristRadius - renderRadius) * alpha;
       anchor.quaternion.slerp(targetPose.rotation, alpha);
       anchor.scale.lerp(new THREE.Vector3().setScalar(targetPose.size), alpha);
+      anchor.position.copy(wristSurfacePosition(renderCenter, anchor.quaternion, renderRadius));
+      const wristRatio = renderRadius / (0.46 * anchor.scale.x);
+      occluder.scale.set(0.83 * wristRatio, wristRatio, 0.47 * wristRatio);
+      occluder.position.z = -0.46 * wristRatio;
       poseInitialized = true;
     } else poseInitialized = false;
     occluder.visible = $('occlusion').checked;
@@ -237,6 +245,10 @@ try {
 }
 for (const id of controls) $(id).addEventListener('input', updateFit);
 $('reset').addEventListener('click', resetFit);
+$('calibrate').addEventListener('click', () => {
+  tracker.reset(); poseInitialized = false;
+  notice('손등을 카메라 쪽으로 향해 잠깐 유지해 주세요. 이 방향을 기준으로 회전을 다시 맞춥니다.');
+});
 $('start').addEventListener('click', () => mode === 'idle' ? startCamera() : stopCamera());
 $('switch').addEventListener('click', () => { facingMode = mirror ? 'environment' : 'user'; stopCamera(); startCamera(); });
 $('model-file').addEventListener('change', event => importModel(event.target.files[0]));

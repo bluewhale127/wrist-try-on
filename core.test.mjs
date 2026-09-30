@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { estimateWristPose, coverTransform, landmarkPoint, smoothingAlpha, WristPoseTracker } from './pose.js';
-import { Vector3 } from './vendor/three/three.module.js';
+import { estimateWristPose, coverTransform, landmarkPoint, smoothingAlpha, WristPoseTracker, wristSurfacePosition } from './pose.js';
+import { Quaternion, Vector3 } from './vendor/three/three.module.js';
 import { inspectGLB } from './watch.js';
 
 const view = { videoWidth: 1280, videoHeight: 720, width: 400, height: 600 };
@@ -56,16 +56,93 @@ test('edge-on and noisy normalized depth do not hide or invert a visible wrist',
   }
 });
 
-test('world depth is bounded and a reversed ambiguous palm cannot flip the dial', () => {
+const rotationView = {width:1000,height:1000,videoWidth:1000,videoHeight:1000};
+function rotatedHand(angle, right = false) {
+  const local = Array.from({length:21}, () => new Vector3());
+  for (const [id,x,y] of [[0,0,-0.04],[1,0.025,-0.022],[2,0.04,0],[5,0.035,0.04],[9,0.012,0.04],[13,-0.012,0.04],[17,-0.035,0.04]]) local[id].set(right?-x:x,y,0);
+  const turn = new Quaternion().setFromAxisAngle(new Vector3(0,1,0),angle);
+  const points = local.map(p=>p.applyQuaternion(turn));
+  return {
+    landmarks:points.map(p=>({x:0.5+p.x*3,y:0.5-p.y*3,z:-p.z*3})),
+    world:points.map(p=>({x:p.x,y:-p.y,z:-p.z})),
+    turn,
+  };
+}
+function rotationPose(angle, {right=false,mirror=false,scale=1}={}) {
+  const hand=rotatedHand(angle,right);
+  return estimateWristPose(hand.landmarks,rotationView,{worldLandmarks:hand.world,mirror,scale});
+}
+test('thumb and pinky bases retain signed rotation through both side views and a full turn', () => {
   let previous;
-  for (let angle = -1.5; angle <= 1.5; angle += 0.05) {
-    const world = landmarks.map(p => ({ x: (p.x - 0.5) * Math.cos(angle), y: p.y * 0.1, z: (p.x - 0.5) * Math.sin(angle) }));
-    const pose = estimateWristPose(landmarks, view, { worldLandmarks: world });
-    const normal = new Vector3(0, 0, 1).applyQuaternion(pose.rotation);
-    assert.ok(normal.z > 0.3);
-    if (previous) assert.ok(pose.rotation.angleTo(previous.rotation) < 0.2);
-    previous = pose;
+  for(let degrees=-180;degrees<=180;degrees+=5){
+    const radians=degrees*Math.PI/180, pose=rotationPose(radians);
+    const expected=new Quaternion().setFromAxisAngle(new Vector3(0,1,0),radians);
+    assert.ok(pose.thumbUsed);
+    assert.ok(pose.rotationQuality>0.5);
+    assert.ok(pose.rotation.angleTo(expected)<1e-6,`angle ${degrees}`);
+    if(previous)assert.ok(pose.rotation.angleTo(previous)<0.1);
+    previous=pose.rotation;
   }
+});
+test('finger tip movement cannot masquerade as forearm rotation', () => {
+  const hand=rotatedHand(0.7), before=estimateWristPose(hand.landmarks,rotationView,{worldLandmarks:hand.world});
+  for(const id of [3,4,6,7,8,10,11,12,14,15,16,18,19,20]){
+    hand.world[id]={x:0.12,y:-0.2,z:0.18};hand.landmarks[id]={x:0.9,y:0.9,z:0.8};
+  }
+  const after=estimateWristPose(hand.landmarks,rotationView,{worldLandmarks:hand.world});
+  assert.ok(before.rotation.angleTo(after.rotation)<1e-6);
+});
+test('a tucked or unreliable thumb falls back to knuckles without freezing rotation', () => {
+  const hand=rotatedHand(1.4), before=estimateWristPose(hand.landmarks,rotationView,{worldLandmarks:hand.world});
+  hand.world[1]={...hand.world[17]};hand.world[2]={...hand.world[17]};
+  hand.world[1].x-=0.08;hand.world[2].x-=0.08;
+  const after=estimateWristPose(hand.landmarks,rotationView,{worldLandmarks:hand.world});
+  assert.ok(after.rotationQuality>=0.5);
+  assert.ok(after.rotation.angleTo(before.rotation)<0.05);
+});
+test('left/right hands and front-camera mirroring keep the physical rotation direction', () => {
+  for(const right of [false,true])for(const mirror of [false,true]){
+    const tracker=new WristPoseTracker();tracker.update(rotationPose(0,{right,mirror}),0);
+    for(let i=1;i<=90;i++)tracker.update(rotationPose(i*Math.PI/180,{right,mirror}),i*33);
+    const normal=new Vector3(0,0,1).applyQuaternion(tracker.pose.rotation);
+    assert.ok(mirror?normal.x< -0.95:normal.x>0.95);
+    assert.ok(Math.abs(normal.z)<0.15);
+  }
+});
+test('side-view rotation keeps moving and does not reset its sign after a detection gap', () => {
+  const tracker=new WristPoseTracker();tracker.update(rotationPose(0),0);
+  for(let i=1;i<=140;i++)tracker.update(rotationPose(i*Math.PI/180),i*33);
+  assert.ok(new Vector3(0,0,1).applyQuaternion(tracker.pose.rotation).z< -0.65);
+  tracker.update(null,4800);assert.equal(tracker.sample(4900),null);
+  tracker.update(rotationPose(150*Math.PI/180),5000);
+  assert.ok(new Vector3(0,0,1).applyQuaternion(tracker.pose.rotation).z< -0.8);
+});
+test('an isolated 180-degree landmark glitch does not turn the watch over', () => {
+  const tracker=new WristPoseTracker();
+  for(const t of [-66,-33,0])tracker.update(rotationPose(0),t);
+  assert.ok(tracker.orientationSign);
+  tracker.update(rotationPose(Math.PI),33);
+  assert.ok(tracker.pose.rotation.angleTo(rotationPose(0).rotation)<1e-6);
+  tracker.update(rotationPose(0),66);
+  assert.ok(tracker.pose.rotation.angleTo(rotationPose(0).rotation)<1e-6);
+});
+test('calibration waits for consistent front-facing observations and reset clears it', () => {
+  const tracker=new WristPoseTracker();
+  for(let i=0;i<4;i++)tracker.update(rotationPose(Math.PI/2),i*33);
+  assert.equal(tracker.orientationSign,0);
+  for(let i=4;i<7;i++)tracker.update(rotationPose(0),i*33);
+  assert.equal(tracker.orientationSign,1);
+  tracker.reset();assert.equal(tracker.orientationSign,0);
+});
+test('case revolves around a fixed wrist centre with radius independent of watch size', () => {
+  const center=new Vector3(23,45,0), radius=30;
+  for(const angle of [0,Math.PI/2,Math.PI,-Math.PI/2]){
+    const pose=rotationPose(angle), surface=wristSurfacePosition(center,pose.rotation,radius);
+    assert.ok(Math.abs(surface.distanceTo(center)-radius)<1e-8);
+    const occluderCenter=new Vector3(0,0,-radius).applyQuaternion(pose.rotation).add(surface);
+    assert.ok(occluderCenter.distanceTo(center)<1e-8);
+  }
+  assert.equal(rotationPose(0,{scale:0.6}).wristRadius,rotationPose(0,{scale:1.6}).wristRadius);
 });
 
 test('brief gaps are held, a missing hand expires, and reacquisition resets', () => {
