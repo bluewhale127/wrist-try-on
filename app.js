@@ -2,7 +2,8 @@ import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { DRACOLoader } from 'three/addons/loaders/DRACOLoader.js';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
-import { estimateWristPose, landmarkPoint, WristPoseTracker, smoothingAlpha, watchRotationDegrees } from './pose.js?v=76';
+import { estimateWristPose, landmarkPoint, WristPoseTracker, smoothingAlpha, watchRotationDegrees } from './pose.js?v=77';
+import { calibrationPrompt } from './initial-calibration.js?v=77';
 import { HandDetector } from './hand-detector.js?v=75';
 import { RearWristAssist, rearObservation } from './rear-assist.js?v=75';
 import { HandTarget } from './hand-target.js?v=73';
@@ -133,7 +134,7 @@ async function startCamera() {
     }, { once: true });
     lastVideoTime = -1; lastDetection = 0; fpsStart = performance.now(); detections = 0;
     updateMode('live');
-    notice('손등과 손가락을 카메라 쪽으로 편하게 펴고 1초 정도 유지해 주세요. 다른 손으로 바꾸면 손등 기준을 다시 맞춰 주세요.');
+    notice('손등과 손가락을 카메라 쪽으로 편하게 펴고 약 2초 동안 움직이지 않고 유지해 주세요. 다른 손으로 바꾸면 손등 기준을 다시 맞춰 주세요.');
   } catch (error) {
     if (id !== operation) { acquired?.getTracks().forEach(t => t.stop()); return; }
     stopCamera();
@@ -177,9 +178,9 @@ async function detect(time) {
     }
     const assistMs = performance.now()-assistStarted;
     if(assistEnabled)inferenceInterval=Math.max(inferenceInterval,Math.min(120,elapsed+assistMs));
-    if (accepted || ['uncertain','reorient','reacquiring','outlier','depth-check'].includes(tracker.diagnostics.state)) {
+    if (accepted || ['calibrating','uncertain','reorient','reacquiring','outlier','depth-check'].includes(tracker.diagnostics.state)) {
       const diagnostic = tracker.diagnostics;
-      $('tracking-label').textContent = !tracker.orientationSign ? `손등을 펴고 잠깐 유지해 주세요 · ${Math.round(diagnostic.progress*100)}%` : diagnostic.state === 'depth-check' ? '손목 회전 방향을 다시 확인하고 있어요' : diagnostic.state === 'reorient' ? '손등 또는 손바닥을 펴서 잠깐 유지 · 방향 복구 중' : diagnostic.state === 'reacquiring' ? '기존 손의 회전을 다시 확인하고 있어요' : ['uncertain','outlier'].includes(diagnostic.state) ? '손목 움직임을 다시 확인하고 있어요' : diagnostic.surfaceConfirmed ? `${diagnostic.surface==='palm'?'손바닥':'손등'} 방향 확인 · 회전을 따라가고 있어요` : diagnostic.state === 'corrected' ? '화면의 손 모양으로 회전을 보정하고 있어요' : '손목 회전을 따라가고 있어요';
+      $('tracking-label').textContent = !tracker.orientationSign ? calibrationPrompt(diagnostic) : diagnostic.state === 'depth-check' ? '손목 회전 방향을 다시 확인하고 있어요' : diagnostic.state === 'reorient' ? '손등 또는 손바닥을 펴서 잠깐 유지 · 방향 복구 중' : diagnostic.state === 'reacquiring' ? '기존 손의 회전을 다시 확인하고 있어요' : ['uncertain','outlier'].includes(diagnostic.state) ? '손목 움직임을 다시 확인하고 있어요' : diagnostic.surfaceConfirmed ? `${diagnostic.surface==='palm'?'손바닥':'손등'} 방향 확인 · 회전을 따라가고 있어요` : diagnostic.state === 'corrected' ? '화면의 손 모양으로 회전을 보정하고 있어요' : '손목 회전을 따라가고 있어요';
     } else {
       $('tracking-label').textContent = handTarget.state === 'recovering' ? '새 위치의 손을 확인 중 · 손등을 잠깐 유지해 주세요' : handTarget.state === 'lost' ? '같은 손을 원래 위치로 · 계속 안 잡히면 손등 기준 맞추기' : tracker.sample(completed) ? '손목을 다시 확인하고 있어요' : '손등과 손가락, 손목을 보여 주세요';
     }
@@ -190,6 +191,7 @@ async function detect(time) {
       const d = tracker.diagnostics;
       $('debug-info').textContent = `상태: ${{calibrating:'기준 설정',tracking:'추적',corrected:'기울기 보정',uncertain:'불확실',missing:'손 없음',reorient:'손 표면으로 방향 복구',reacquiring:'회전 재확인',outlier:'순간 튐 확인','depth-check':'전면 회전 방향 재확인'}[d.state]} · 배치 일치도 ${Math.round(d.quality*100)}%\n표면 추정: ${{back:'손등',palm:'손바닥',edge:'옆면·기울임'}[d.surface]||'확인 중'} · 기준 ${d.surfaceConfirmed?'확인됨':'확인 중'}\n시계 방향 ${values.rotation}° · 엄지 축 ${tracker.watchOrientationSign}\n대상: ${handTarget.state} · 검출 ${result.landmarks?.length || 0}개\n프레임 처리 ${Math.round(completed-time)}ms · ${handLandmarker.backend}\n일치도는 실제 정확도 점수가 아닙니다.`;
       if(mirror)$('debug-info').textContent+=`\n전면 깊이 확인 ${d.depthEvidenceFrames||0}회 · ${d.depthRealigned?'방향 복구':d.depthPending?'방향 확인 중':'추적 중'}`;
+      if(!tracker.orientationSign)$('debug-info').textContent+=`\n초기 기준: ${calibrationPrompt(d)}`;
       if(assistEnabled)$('debug-info').textContent+=`\n후면 보조: ${rearAssist.diagnostics.state} · ${rearAssist.diagnostics.reason} · ${Math.round(assistMs)}ms`;
       diagnosticRecords.push({ time, elapsed: completed-time, inferenceMs: elapsed, backend: handLandmarker.backend,
         rearAssist:assistEnabled?{...rearAssist.diagnostics,observation,processingMs:assistMs}:null,
@@ -342,16 +344,16 @@ $('align-dial').addEventListener('click', () => {
   $('rotation').value = 90; $('tilt-x').value = 0; $('tilt-y').value = 0;
   updateFit(); saveFit();
   if (mode === 'live') { operation++; tracker.reset(); handTarget.reset(); rearAssist.reset(); poseInitialized = false; }
-  notice('6시는 엄지, 12시는 새끼손가락 쪽으로 맞춥니다. 카메라에 손등과 손가락을 펴고 1초 정도 유지해 주세요.');
+  notice('6시는 엄지, 12시는 새끼손가락 쪽으로 맞춥니다. 카메라에 손등과 손가락을 펴고 약 2초 동안 움직이지 않고 유지해 주세요.');
 });
 $('calibrate').addEventListener('click', () => {
   operation++;
   tracker.reset(); handTarget.reset(); rearAssist.reset(); poseInitialized = false;
-  notice('손등과 손가락을 카메라 쪽으로 펴고 1초 정도 유지해 주세요. 손의 기준 형태와 회전을 다시 맞춥니다.');
+  notice('손등과 손가락을 카메라 쪽으로 펴고 약 2초 동안 움직이지 않고 유지해 주세요. 손의 기준 형태와 회전을 다시 맞춥니다.');
 });
 $('save-diagnostics').addEventListener('click',()=>{
   if(!diagnosticRecords.length)return;
-  const blob=new Blob([JSON.stringify({version:'0.7.6',engine,recordedAt:new Date().toISOString(),frames:diagnosticRecords})],{type:'application/json'});
+  const blob=new Blob([JSON.stringify({version:'0.7.7',engine,recordedAt:new Date().toISOString(),frames:diagnosticRecords})],{type:'application/json'});
   const url=URL.createObjectURL(blob), link=document.createElement('a');link.href=url;link.download='wrist-diagnostics.json';link.click();setTimeout(()=>URL.revokeObjectURL(url),1000);
 });
 $('start').addEventListener('click', () => mode === 'idle' ? startCamera() : stopCamera());

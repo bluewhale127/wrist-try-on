@@ -82,10 +82,12 @@ test('reacquired hand blends back and view changes invalidate optical history',(
 test('rear geometry guard rejects collapsed longitudinal geometry and cropped palm',()=>{
   const landmarks=Array.from({length:21},()=>({x:.5,y:.5,z:0}));
   for(const [i,x,y] of [[0,.5,.7],[5,.63,.4],[9,.55,.4],[13,.46,.4],[17,.37,.4]])landmarks[i]={x,y,z:0};
+  for(const base of [5,9,13,17])for(let j=1;j<=3;j++)landmarks[base+j]={x:landmarks[base].x,y:.4-j*.055,z:0};
+  landmarks[1]={x:.62,y:.6,z:0};landmarks[2]={x:.66,y:.5,z:0};
   const world=landmarks.map(p=>({x:(p.x-.5)*.2,y:(p.y-.5)*.2,z:0}));
   const tracker=new WristPoseTracker();
   const full=()=>estimateWristPose(landmarks,view,{worldLandmarks:world});
-  for(let t=0;t<=700;t+=50)tracker.update(full(),t);
+  for(let t=0;t<=1800;t+=50)tracker.update(full(),t);
   assert.ok(tracker.template);assert.equal(rearObservation(full(),landmarks,tracker).allowed,true);
   const compressed=landmarks.map(p=>({...p,y:.6+(p.y-.6)*.25}));
   assert.equal(rearObservation(estimateWristPose(compressed,view,{worldLandmarks:world}),compressed,tracker).reason,'foreshortened');

@@ -11,7 +11,7 @@
 </head>
 <body>
   <main class="app">
-    <header class="header"><div><span class="eyebrow">WRIST / STUDIO</span><h1>손목 위의 시계</h1></div><span class="badge">착용 테스트 · 0.7.6</span></header>
+    <header class="header"><div><span class="eyebrow">WRIST / STUDIO</span><h1>손목 위의 시계</h1></div><span class="badge">착용 테스트 · 0.7.7</span></header>
     <div class="workspace">
       <section class="viewer" aria-label="시계 착용 화면">
         <div id="stage" class="stage">
@@ -26,7 +26,7 @@
         <label class="check-label"><input id="rear-assist" type="checkbox" checked>후면 근접·움직임 보조 <span>시험 적용</span></label>
         <p class="small">손을 놓쳐도 손목 영상이 확인되면 최대 1초 이어갑니다. 큰 기울기·가림에서는 이어가지 못할 수 있으며, 전면에는 적용하지 않습니다.</p>
         <button id="calibrate" class="text-button" type="button" disabled>손등 기준 맞추기</button>
-        <p id="status" class="status" role="status" aria-live="polite">밝은 곳에서 손등과 손가락, 손목이 함께 보이게 비춰 주세요.</p>
+        <p id="status" class="status" role="status" aria-live="polite">손끝까지 화면에 넣고 손등을 카메라와 평행하게 맞춰 주세요. 기준 확인이 끝날 때까지 약 2초 동안 멈춰 주세요.</p>
         <p id="error" class="error" role="alert" hidden></p>
         <details id="diagnostics"><summary>관절·회전 진단</summary>
           <label class="check-label"><input id="debug" type="checkbox">진단 표시·좌표 기록</label>
@@ -57,8 +57,8 @@
         <p class="note">크기는 시각적으로 추정합니다. 실제 치수 측정용은 아니며, 손목을 크게 돌리면 정렬이 흐트러질 수 있습니다.</p>
       </aside>
     </div>
-    <footer>Wrist Studio 0.7.6 · Android Chrome 기준 · 영상은 기기 안에서 처리됩니다</footer>
+    <footer>Wrist Studio 0.7.7 · Android Chrome 기준 · 영상은 기기 안에서 처리됩니다</footer>
   </main>
-  <script type="module" src="./app.js?v=76"></script>
+  <script type="module" src="./app.js?v=77"></script>
 </body>
 </html>

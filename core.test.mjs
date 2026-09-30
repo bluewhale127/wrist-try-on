@@ -63,6 +63,9 @@ const rotationView = {width:1000,height:1000,videoWidth:1000,videoHeight:1000};
 function rotatedHand(angle, right = false) {
   const local = Array.from({length:21}, () => new Vector3());
   for (const [id,x,y] of [[0,0,-0.04],[1,0.025,-0.022],[2,0.04,0],[5,0.035,0.04],[9,0.012,0.04],[13,-0.012,0.04],[17,-0.035,0.04]]) local[id].set(right?-x:x,y,0);
+  local[3].set(.052,.022,0); local[4].set(.06,.038,0);
+  for(const base of [5,9,13,17])for(let joint=1;joint<=3;joint++)local[base+joint].set(local[base].x,.04+joint*.02,0);
+  if(right){local[3].x*=-1;local[4].x*=-1;}
   const turn = new Quaternion().setFromAxisAngle(new Vector3(0,1,0),angle);
   const points = local.map(p=>p.applyQuaternion(turn));
   return {
@@ -105,7 +108,7 @@ test('a tucked or unreliable thumb falls back to knuckles without freezing rotat
 });
 test('left/right hands and front-camera mirroring keep the physical rotation direction', () => {
   for(const right of [false,true])for(const mirror of [false,true]){
-    const tracker=new WristPoseTracker();tracker.update(rotationPose(0,{right,mirror}),0);
+    const tracker=calibratedTracker({right,mirror});
     for(let i=1;i<=90;i++)tracker.update(rotationPose(i*Math.PI/180,{right,mirror}),i*33);
     const normal=new Vector3(0,0,1).applyQuaternion(tracker.pose.rotation);
     assert.ok(mirror?normal.x< -0.95:normal.x>0.95);
@@ -113,7 +116,7 @@ test('left/right hands and front-camera mirroring keep the physical rotation dir
   }
 });
 test('side-view rotation keeps moving and does not reset its sign after a detection gap', () => {
-  const tracker=new WristPoseTracker();tracker.update(rotationPose(0),0);
+  const tracker=calibratedTracker();
   for(let i=1;i<=140;i++)tracker.update(rotationPose(i*Math.PI/180),i*33);
   assert.ok(new Vector3(0,0,1).applyQuaternion(tracker.pose.rotation).z< -0.65);
   tracker.update(null,4800);assert.equal(tracker.sample(4900),null);
@@ -125,7 +128,7 @@ test('side-view rotation keeps moving and does not reset its sign after a detect
 });
 test('an isolated 180-degree landmark glitch does not turn the watch over', () => {
   const tracker=new WristPoseTracker();
-  for(let t=-600;t<=0;t+=50)tracker.update(rotationPose(0),t);
+  for(let t=-1800;t<=0;t+=50)tracker.update(rotationPose(0),t);
   assert.ok(tracker.orientationSign);
   tracker.update(rotationPose(Math.PI),33);
   assert.ok(tracker.pose.rotation.angleTo(rotationPose(0).rotation)<1e-6);
@@ -140,14 +143,14 @@ test('calibration needs elapsed stable time, a frontal view, and restarts after 
   assert.equal(tracker.orientationSign,0);
   tracker.update(rotationPose(0),900);
   assert.equal(tracker.orientationSign,0);
-  for(let t=950;t<=1500;t+=50)tracker.update(rotationPose(0),t);
+  for(let t=950;t<=2400;t+=50)tracker.update(rotationPose(0),t);
   assert.equal(tracker.orientationSign,1);
   tracker.reset();assert.equal(tracker.orientationSign,0);assert.equal(tracker.template,null);
 });
 
 function calibratedTracker(options={}) {
   const tracker=new WristPoseTracker();
-  for(let t=-600;t<=0;t+=50)tracker.update(rotationPose(0,options),t);
+  for(let t=-1800;t<=0;t+=50)tracker.update(rotationPose(0,options),t);
   assert.ok(tracker.orientationSign);return tracker;
 }
 test('projected palm fitting recovers rotations about multiple axes',()=>{
@@ -266,20 +269,22 @@ test('motion memory permits real reversals at the palm-facing turning point',()=
 });
 test('long-loss recovery accepts the original tilted calibration view',()=>{
   const tracker=new WristPoseTracker();
-  for(let t=-600;t<=0;t+=50)tracker.update(rotationPose(0.5),t);
+  for(let t=-1800;t<=0;t+=50)tracker.update(rotationPose(0.25),t);
   assert.ok(tracker.orientationSign);
-  for(let t=2000;t<=2300;t+=50)tracker.update(rotationPose(0.5),t);
+  for(let t=2000;t<=2300;t+=50)tracker.update(rotationPose(0.25),t);
   assert.ok(tracker.sample(2300));
-  assert.ok(tracker.pose.rotation.angleTo(rotationPose(0.5).rotation)<0.05);
+  assert.ok(tracker.pose.rotation.angleTo(rotationPose(0.25).rotation)<0.05);
 });
 
 test('initial world-axis inversion cannot reverse 6 and 12 relative to observed thumb',()=>{
   for(const right of [false,true])for(const mirror of [false,true]){
     const observed=rotatedHand(0,right),wrong=rotatedHand(0,!right),tracker=new WristPoseTracker();
     const pose=()=>estimateWristPose(observed.landmarks,rotationView,{mirror,worldLandmarks:wrong.world});
-    for(let t=-600;t<=0;t+=50)tracker.update(pose(),t);
+    for(let t=-1800;t<=0;t+=50)tracker.update(pose(),t);
+    assert.equal(tracker.orientationSign,0);
+    assert.equal(tracker.diagnostics.reason,'depth');
+    for(let t=50;t<=1850;t+=50)tracker.update(rotationPose(0,{right,mirror}),t);
     assert.ok(tracker.orientationSign);
-    assert.ok(tracker.template[1].x<tracker.template[4].x);
     const six=new Vector3(0,-1,0).applyAxisAngle(new Vector3(0,0,1),watchRotationDegrees(90,tracker.watchOrientationSign)*Math.PI/180).applyQuaternion(tracker.pose.rotation).setZ(0).normalize();
     const radial=pose().imagePalm[1].clone().sub(pose().imagePalm[4]).setZ(0).normalize();
     assert.ok(six.dot(radial)>0.99);
@@ -336,11 +341,13 @@ test('a missing frame cancels accumulated surface confirmation',()=>{
 test('front rotation reversals escape a biased calibration on either hand at phone cadences',()=>{
   for(const right of [false,true])for(const direction of [-1,1])for(const dt of [33,66,100]){
     const options={right,mirror:true},tracker=new WristPoseTracker();
-    // Image and landmark depth describe a frontal hand. A plausible initial
-    // world tilt stretches its reference so the two fitted solutions never meet.
-    for(let t=-600;t<=0;t+=50){
-      const pose=rotationPose(0,options);pose.rotation.copy(rotationPose(direction*.45,options).rotation);tracker.update(pose,t);
-    }
+    for(let t=-1800;t<=0;t+=50)tracker.update(rotationPose(0,options),t);
+    // Deliberately inject the old biased reference after valid calibration.
+    // Startup now rejects this inconsistency, but later repair must still work.
+    const biased=rotationPose(0,options);biased.rotation.copy(rotationPose(direction*.45,options).rotation);
+    tracker.template=palmTemplate(biased.imagePalm,biased.rotation);
+    tracker.calibrationRotation.copy(biased.rotation);
+    if(tracker.orientationSign===-1)tracker.calibrationRotation.multiply(new Quaternion().setFromAxisAngle(new Vector3(0,1,0),Math.PI));
     const sign=tracker.watchOrientationSign;
     const sequence=[...Array.from({length:20},(_,i)=>(i+1)*direction*.05),
       ...Array.from({length:40},(_,i)=>direction*(.95-i*.05)),
@@ -648,3 +655,67 @@ test('GLB validation accepts embedded assets and rejects missing external textur
   assert.throws(() => inspectGLB(new ArrayBuffer(24)), /GLB/);
 });
 
+
+
+test('startup waits for 1.5 seconds and enough independent input frames at phone cadences',()=>{
+  for(const dt of [33,66,100,200])for(const mirror of [false,true])for(const right of [false,true]){
+    const tracker=new WristPoseTracker();let time=0;
+    for(;time<Math.max(1500,11*dt);time+=dt){tracker.update(rotationPose(0,{mirror,right}),time);assert.equal(tracker.orientationSign,0);}
+    tracker.update(rotationPose(0,{mirror,right}),time);assert.ok(tracker.orientationSign);
+    assert.ok(tracker.sample(time));
+  }
+});
+test('startup cannot accumulate dwell through missing or invalid frames',()=>{
+  for(const missing of [null,'quality']){
+    const tracker=new WristPoseTracker();
+    for(let t=0;t<=1400;t+=100)tracker.update(rotationPose(0),t);
+    const invalid=missing===null?null:rotationPose(0);if(invalid)invalid.rotationQuality=0;
+    tracker.update(invalid,1450);
+    for(let t=1500;t<3000;t+=100){tracker.update(rotationPose(0),t);assert.equal(tracker.orientationSign,0);}
+    tracker.update(rotationPose(0),3000);assert.ok(tracker.orientationSign);
+  }
+});
+test('startup rejects tilted, depth-inconsistent, cropped and curled inputs without timing out to a guess',()=>{
+  for(const kind of ['tilted','depth','cropped','curled'])for(const mirror of [false,true]){
+    const tracker=new WristPoseTracker(),hand=rotatedHand(kind==='tilted'?.5:0);
+    if(kind==='cropped')hand.landmarks[12].x=1.01;
+    if(kind==='curled')hand.landmarks[8]={...hand.landmarks[5]};
+    const world=kind==='depth'?rotatedHand(.5).world:hand.world;
+    for(let t=0;t<=10000;t+=100)tracker.update(estimateWristPose(hand.landmarks,rotationView,{worldLandmarks:world,mirror}),t);
+    assert.equal(tracker.orientationSign,0,kind);assert.equal(tracker.template,null);
+    assert.equal(tracker.diagnostics.progress,0);
+    assert.equal(tracker.diagnostics.reason,{tilted:'frontal',depth:'depth',cropped:'frame',curled:'open'}[kind]);
+  }
+});
+test('startup sees cover-cropped fingers even when sensor coordinates are in bounds',()=>{
+  const hand=rotatedHand(0),narrow={...rotationView,width:180};
+  const pose=estimateWristPose(hand.landmarks,narrow,{worldLandmarks:hand.world});
+  assert.ok(hand.landmarks.every(p=>p.x>0&&p.x<1));assert.equal(pose.calibration.inFrame,false);
+});
+test('slow continuous movement cannot drag the startup reference along with it',()=>{
+  for(const kind of ['rotation','translation','scale','shape']){
+    const tracker=new WristPoseTracker();
+    for(let t=0;t<=1200;t+=100){
+      const hand=rotatedHand(kind==='rotation'?t*.00025:0);
+      if(kind==='translation')for(const p of hand.landmarks)p.x+=t*.000025;
+      if(kind==='scale')for(const p of hand.landmarks){p.x=.5+(p.x-.5)*(1+t*.00008);p.y=.5+(p.y-.5)*(1+t*.00008);}
+      if(kind==='shape')hand.landmarks[9].x+=t*.00002;
+      tracker.update(estimateWristPose(hand.landmarks,rotationView,{worldLandmarks:hand.world}),t);
+    }
+    assert.equal(tracker.orientationSign,0);assert.ok(tracker.diagnostics.progress<.8,kind);
+  }
+});
+test('small stationary jitter can finish calibration on either camera',()=>{
+  for(const mirror of [false,true]){
+    const tracker=new WristPoseTracker();
+    for(let t=0;t<=1600;t+=100){const hand=rotatedHand(t%200?.015:-.015);for(const p of hand.landmarks)p.x+=t%200?.001:-.001;tracker.update(estimateWristPose(hand.landmarks,rotationView,{worldLandmarks:hand.world,mirror}),t);}
+    assert.ok(tracker.orientationSign);assert.ok(tracker.sample(1600));
+  }
+});
+test('startup-only finger gates do not reset a learned palm when fingers curl or leave view',()=>{
+  const tracker=calibratedTracker(),template=tracker.template;
+  const hand=rotatedHand(.3);for(const i of [8,12,16,20])hand.landmarks[i]={x:1.2,y:1.2,z:0};
+  for(let t=50;t<=500;t+=50)tracker.update(estimateWristPose(hand.landmarks,rotationView,{worldLandmarks:hand.world}),t);
+  assert.equal(tracker.template,template);assert.ok(tracker.sample(500));
+  tracker.reset();tracker.update(estimateWristPose(hand.landmarks,rotationView,{worldLandmarks:hand.world}),550);assert.equal(tracker.orientationSign,0);
+});

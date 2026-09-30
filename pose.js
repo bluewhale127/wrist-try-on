@@ -1,5 +1,7 @@
 import { Matrix4, Quaternion, Vector3 } from './vendor/three/three.module.js';
-import { palmTemplate, fitPalmProjection } from './palm-projection.js?v=5';
+import { fitPalmProjection } from './palm-projection.js?v=5';
+
+import { InitialCalibration } from './initial-calibration.js?v=77';
 
 // The video and 3D overlay both use CSS object-fit: cover. All units here are CSS pixels.
 export function coverTransform(videoWidth, videoHeight, width, height) {
@@ -89,7 +91,7 @@ export function estimateWristPose(landmarks, view, { mirror = false, offset = 0.
   // Normalized landmark depth and world depth come from the same model. Their
   // agreement is a consistency check, not an independent depth measurement.
   let depthRotation = null;
-  if (mirror) {
+  {
     const dy = observed.slice(1).reduce((sum,p)=>sum.add(p),new Vector3()).multiplyScalar(0.25).sub(observed[0]);
     const dx = observed[1].clone().sub(observed[4]);
     if (dy.length() > 12) {
@@ -101,7 +103,13 @@ export function estimateWristPose(landmarks, view, { mirror = false, offset = 0.
       }
     }
   }
-  return { position, rotation, size, wristRadius: palmWidth * 0.65 * 0.46, heading, rotationQuality, thumbUsed, imagePalm: screen, worldPalm, userScale: scale, mirror, depthRotation };
+  const allPoints = landmarks.every(finitePoint) ? landmarks.map(p=>landmarkPoint(p,view,mirror)) : [];
+  const inFrame = allPoints.length === 21 && allPoints.every(p=>Math.abs(p.x)<view.width*.48 && Math.abs(p.y)<view.height*.48);
+  // Geometric eligibility, not an occlusion classifier: inferred landmarks
+  // can still be wrong. Require extended fingers only while learning a palm.
+  const open = allPoints.length === 21 && [5,9,13,17].every(i=>
+    allPoints[i+3].clone().sub(allPoints[i]).dot(y2) > projectedLength*.25);
+  return { calibration: {inFrame,open}, position, rotation, size, wristRadius: palmWidth * 0.65 * 0.46, heading, rotationQuality, thumbUsed, imagePalm: screen, worldPalm, userScale: scale, mirror, depthRotation };
 }
 
 // Rotate the case around the wrist centre, not around the centre of the dial.
@@ -137,8 +145,7 @@ export class WristPoseTracker {
     this.pose = null; this.previous = null; this.lastGood = -Infinity; this.speed = 0;
     this.velocity = new Vector3(); this.pending = null; this.pendingRotation = null;
     this.motionVelocity = new Vector3(); this.pendingPose = null;
-    this.orientationSign = 0; this.angularSpeed = 0; this.reference = null; this.referenceFrames = 0;
-    this.referenceStarted = 0; this.referenceTime = -Infinity; this.templates = []; this.template = null;
+    this.orientationSign = 0; this.angularSpeed = 0; this.initialCalibration = new InitialCalibration(); this.template = null;
     this.calibrationRotation = null; this.calibrationHeading = 0;
     this.lastRotationGood = -Infinity; this.lastInput = -Infinity;
     this.previousRotation = null; this.rotationVelocity = new Vector3(); this.recovery = null; this.branchEvidence = null;
@@ -148,28 +155,20 @@ export class WristPoseTracker {
   }
   orientedRotation(next, time) {
     this.diagnostics = { state: 'uncertain', quality: 0, progress: this.orientationSign ? 1 : 0 };
-    if (next.rotationQuality < 0.5) { this.branchEvidence = null; this.surfaceEvidence = null; this.depthEvidence = null; return null; }
     if (!this.orientationSign) {
-      const normalZ = Z.clone().applyQuaternion(next.rotation).z;
-      const template = Math.abs(normalZ) >= 0.6 && palmTemplate(next.imagePalm, next.rotation);
-      this.diagnostics.state = 'calibrating';
-      if (!template) { this.reference = null; this.referenceFrames = 0; return null; }
-      if (!this.reference || time - this.referenceTime > 250 || this.reference.angleTo(next.rotation) > 0.25) {
-        this.reference = next.rotation.clone(); this.referenceFrames = 0;
-        this.referenceStarted = time; this.templates = [];
-      }
-      this.referenceTime = time;
-      this.reference.slerp(next.rotation, 0.5);
-      this.templates.push(template); if(this.templates.length>30)this.templates.shift();
-      this.diagnostics.progress = Math.min(1,(time-this.referenceStarted)/500);
-      if (++this.referenceFrames < 6 || time - this.referenceStarted < 500) return null;
-      this.orientationSign = normalZ >= 0 ? 1 : -1;
-      this.calibrationRotation = this.reference.clone();
+      const initial = this.initialCalibration.update(next,time);
+      this.diagnostics = {state:'calibrating', quality:0, progress:initial.progress, reason:initial.reason};
+      if (!initial.ready) return null;
+      this.orientationSign = Z.clone().applyQuaternion(initial.rotation).z >= 0 ? 1 : -1;
+      this.calibrationRotation = initial.rotation;
       if (this.orientationSign === -1) this.calibrationRotation.multiply(halfTurn);
       this.calibrationHeading = next.heading;
-      this.template = template.map((_,i)=>this.templates.reduce((sum,t)=>sum.add(t[i]),new Vector3()).multiplyScalar(1/this.templates.length));
-      this.templates = [];
+      this.template = initial.template;
+      this.initialCalibration.reset();
+      // Discard provisional position history before the first visible pose.
+      this.pose = null;
     }
+    if (next.rotationQuality < 0.5) { this.branchEvidence = null; this.surfaceEvidence = null; this.depthEvidence = null; return null; }
     const projection = fitPalmProjection(this.template, next.imagePalm);
     if (!projection) { this.surfaceEvidence = null; this.depthEvidence = null; return null; }
     const raw = this.orientationSign === 1 ? next.rotation.clone() : next.rotation.clone().multiply(halfTurn);
@@ -284,7 +283,7 @@ export class WristPoseTracker {
     if (!Number.isFinite(time) || time <= this.lastInput) return false;
     const frameDt = clamp((time-this.lastInput)/1000, 0.001, 0.1);
     this.lastInput = time;
-    if (!next) { this.branchEvidence = null; this.surfaceEvidence = null; this.depthEvidence = null; this.diagnostics = { state: 'missing', quality: 0, progress: this.orientationSign ? 1 : 0 }; return false; }
+    if (!next) { if (!this.orientationSign) this.initialCalibration.reset(); this.branchEvidence = null; this.surfaceEvidence = null; this.depthEvidence = null; this.diagnostics = { state: 'missing', quality: 0, progress: this.orientationSign ? 1 : 0 }; return false; }
     next = { ...next };
     const oriented = this.orientedRotation(next, time);
     // A failed rotation fit also makes its inferred scale/anchor untrustworthy.
