@@ -406,6 +406,25 @@ test('one wrist cylinder defines case contact and fitted strap across watch size
   rig.fit({...dimensions,caseSize:65,sample:false,guide:true});
   assert.equal(rig.strap.visible,false);assert.equal(rig.guide.visible,true);
 });
+test('strap leaves the case downward and meets the wrist tangentially without a floating shelf',()=>{
+  const points=new Float32Array(81*12), dimensions=wristDimensions(100,1.3,1.4),caseSize=87.75;
+  const caseRotation=new Quaternion().setFromAxisAngle(new Vector3(0,0,1),Math.PI/2);
+  fitStrapPositions(points,{...dimensions,caseSize,caseRotation});
+  const center=i=>new Vector3().fromArray(points,i*12).add(new Vector3().fromArray(points,i*12+3)).multiplyScalar(.5);
+  const rx=dimensions.radiusX+.012*caseSize,rz=dimensions.radiusZ+.012*caseSize;
+  for(const [lugIndex,joinIndex,direction] of [[0,8,1],[80,72,-1]]){
+    const lug=center(lugIndex),join=center(joinIndex),descent=join.clone().sub(lug);
+    assert.ok(descent.z < -dimensions.radiusZ*.5,'connector turns down beside the case');
+    assert.ok(Math.abs((join.x/rx)**2+(join.z/rz)**2-1)<1e-6,'contact is on the wrist');
+    const normal=new Vector3(join.x/(rx*rx),0,join.z/(rz*rz)).normalize();
+    assert.ok(Math.abs(descent.clone().normalize().dot(normal))<1e-5,'no sharp kink at contact');
+    for(let step=1;step<8;step++){
+      const p=center(lugIndex+direction*step);
+      assert.ok(p.distanceTo(lug.clone().lerp(join,step/8))<1e-5,'no raised shelf between lug and contact');
+      assert.ok((p.x/rx)**2+(p.z/rz)**2>=1-1e-6,'strap does not cut through the wrist');
+    }
+  }
+});
 test('wrist width/depth adjustments preserve a finite strap attached to tilted case lugs',()=>{
   const points=new Float32Array(81*12);
   for(const width of [0.65,1,1.45])for(const depth of [0.6,1,1.5]){

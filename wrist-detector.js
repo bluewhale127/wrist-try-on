@@ -1,5 +1,25 @@
 // The vendor singleton owns its inference loop; the app owns the camera stream.
 let lifecycle = Promise.resolve();
+
+// Evaluate this frame ourselves. The SDK's direction-constrained solver can
+// report ok while retaining the previous error when no direction fits.
+export function wristReprojectionError(points, imagePoints, solved, focal) {
+  if (!solved?.ok || !solved.rotation || !solved.translation) return Infinity;
+  const r = solved.rotation, t = solved.translation;
+  if (r.length !== 3 || r.some(row => row?.length !== 3) || t.length !== 3 || points.length !== imagePoints.length ||
+    ![focal, ...t, ...r.flatMap(row => Array.from(row))].every(Number.isFinite)) return Infinity;
+  let error = 0;
+  for (let i = 0; i < points.length; i++) {
+    const [x, y, z] = points[i];
+    // Undo the SDK output's Z-axis convention to recover its camera projection.
+    const depth = -r[2][0] * x - r[2][1] * y + r[2][2] * z + t[2];
+    if (!(depth > 0)) return Infinity;
+    const u = focal * (r[0][0] * x + r[0][1] * y - r[0][2] * z + t[0]) / depth;
+    const v = focal * (r[1][0] * x + r[1][1] * y - r[1][2] * z + t[1]) / depth;
+    error += Math.hypot(u - imagePoints[i][0], v - imagePoints[i][1]);
+  }
+  return points.length ? error / points.length : Infinity;
+}
 export class WristDetector {
   constructor() {
     this.closed = false; this.ready = false; this.api = null; this.canvas = null; this.backend = 'wrist-WebGL';
@@ -52,10 +72,13 @@ export class WristDetector {
           if (!state.isDetected || state.detected < 0.85) { onResult({ detected: state.detected, isDetected: false, solved: null }, time); return; }
           const landmarks = state.landmarks.map(p => p.slice());
           const points = state.isRightHand ? objectPoints : objectPoints.map(p => [-p[0], p[1], p[2]]);
-          const rawPose = api.compute_pose(points, landmarks.map(p => [-p[0] * width / 2, -p[1] * height / 2]), focal, focal,
-            { rotationDirectionSrc: [0, 1, 0], rotationDirectionDst: [0, 0, 1] });
+          const imagePoints = landmarks.map(p => [-p[0] * width / 2, -p[1] * height / 2]);
+          // Let image geometry solve the pose; temporal acceptance is handled
+          // by our tracker instead of the SDK's camera-facing direction lock.
+          const rawPose = api.compute_pose(points, imagePoints, focal, focal);
           // The SDK reuses typed arrays on its next frame. Own our diagnostic snapshot.
-          const solved = rawPose && { ok: rawPose.ok, repError: rawPose.repError,
+          const solved = rawPose?.rotation && rawPose?.translation && { ok: rawPose.ok, sdkRepError: rawPose.repError,
+            repError: wristReprojectionError(points, imagePoints, rawPose, focal),
             rotation: rawPose.rotation.map(row => Array.from(row)), translation: Array.from(rawPose.translation) };
           onResult({ solved, landmarks, width, height, focal, modelWidth, isRightHand: state.isRightHand, detected: state.detected }, time);
         },

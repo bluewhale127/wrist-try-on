@@ -10,6 +10,17 @@ export function wristDimensions(palmWidth, width = 1, depth = 1) {
 
 const smoothstep = t => { t = Math.max(0, Math.min(1, t)); return t * t * (3 - 2 * t); };
 const SEGMENTS = 80;
+const CONNECTOR_SEGMENTS = 8;
+
+// A straight strap leaving a lug touches the wrist at the ellipse's tangent.
+// Blending the lug into a long arc creates an unsupported shelf above the skin.
+function tangentAngle(point, radiusX, radiusZ, side) {
+  const x = point.x / radiusX, z = point.z / radiusZ;
+  const phase = Math.atan2(x, z);
+  const angle = phase + side * Math.acos(Math.min(1, 1 / Math.hypot(x, z)));
+  return side > 0 ? Math.max(0.02, Math.min(Math.PI - 0.02, angle))
+    : Math.max(Math.PI + 0.02, Math.min(Math.PI * 2 - 0.02, angle + Math.PI * 2));
+}
 
 // Coordinates are in the wrist frame (Y along the forearm, X across it).
 // The middle of the band follows the same ellipse used by the depth occluder.
@@ -21,16 +32,31 @@ export function fitStrapPositions(positions, { radiusX, radiusZ, caseSize, caseR
   if (start.x < end.x) [start, end] = [end, start];
   const endWidth = new THREE.Vector3(0.19 * caseSize, 0, 0).applyQuaternion(caseRotation);
   if (endWidth.y < 0) endWidth.negate();
-  const endNormal = new THREE.Vector3(0, 0, 1).applyQuaternion(caseRotation);
-  const opening = Math.max(0.25, Math.min(1.12, Math.asin(Math.min(0.92, Math.abs(start.x) / radiusX))));
   const clearance = 0.012 * caseSize, thickness = 0.035 * caseSize;
+  const rx = radiusX + clearance, rz = radiusZ + clearance;
+  const startAngle = tangentAngle(start, rx, rz, 1);
+  const endAngle = tangentAngle(end, rx, rz, -1);
+  const onEllipse = angle => new THREE.Vector3(Math.sin(angle) * rx, 0, Math.cos(angle) * rz);
+  const startContact = onEllipse(startAngle), endContact = onEllipse(endAngle);
+  const bandWidth = new THREE.Vector3(0, 0.19 * caseSize, 0);
   for (let i = 0; i <= SEGMENTS; i++) {
-    const u = i / SEGMENTS, angle = opening + (Math.PI * 2 - 2 * opening) * u;
-    const blend = 1 - smoothstep(Math.min(u, 1 - u) / 0.14);
-    const center = new THREE.Vector3(Math.sin(angle) * (radiusX + clearance), 0, Math.cos(angle) * (radiusZ + clearance));
-    center.lerp(u < 0.5 ? start : end, blend);
-    const width = new THREE.Vector3(0, 0.19 * caseSize, 0).lerp(endWidth, blend);
-    const normal = new THREE.Vector3(Math.sin(angle) / radiusX, 0, Math.cos(angle) / radiusZ).normalize().lerp(endNormal, blend).normalize();
+    let center, width, normal;
+    if (i < CONNECTOR_SEGMENTS || i > SEGMENTS - CONNECTOR_SEGMENTS) {
+      const atStart = i < CONNECTOR_SEGMENTS;
+      const t = atStart ? i / CONNECTOR_SEGMENTS : (SEGMENTS - i) / CONNECTOR_SEGMENTS;
+      const lug = atStart ? start : end, contact = atStart ? startContact : endContact;
+      center = lug.clone().lerp(contact, t);
+      width = endWidth.clone().lerp(bandWidth, smoothstep(t));
+      const tangent = contact.clone().sub(lug).multiplyScalar(atStart ? 1 : -1);
+      normal = tangent.cross(width).normalize();
+      if (normal.lengthSq() < 0.5) normal.set(center.x / (rx * rx), 0, center.z / (rz * rz)).normalize();
+      if (normal.dot(new THREE.Vector3(center.x, 0, center.z)) < 0) normal.negate();
+    } else {
+      const t = (i - CONNECTOR_SEGMENTS) / (SEGMENTS - 2 * CONNECTOR_SEGMENTS);
+      const angle = startAngle + (endAngle - startAngle) * t;
+      center = onEllipse(angle); width = bandWidth;
+      normal = new THREE.Vector3(Math.sin(angle) / rx, 0, Math.cos(angle) / rz).normalize();
+    }
     for (let j = 0; j < 4; j++) {
       const point = center.clone().addScaledVector(width, j % 2 ? 1 : -1).addScaledVector(normal, j < 2 ? 0 : thickness);
       point.toArray(positions, i * 12 + j * 3);

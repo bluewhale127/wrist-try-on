@@ -3,6 +3,22 @@ import assert from 'node:assert/strict';
 import {Quaternion,Vector3} from './vendor/three/three.module.js';
 import {FitSettings,defaultFit,sanitizeFit} from './fit-settings.js';
 import {directWristPose,DirectWristTracker} from './direct-wrist-pose.js';
+import {wristReprojectionError} from './wrist-detector.js';
+
+test('wrist projection error uses current landmarks and camera geometry instead of a stale SDK score',()=>{
+  const points=[[-2,-1,-1],[2,-1,-1],[-2,1,-1],[2,1,-1],[-2,-1,1],[2,-1,1],[-2,1,1],[2,1,1]];
+  for(const angle of [0,.6,-1.2])for(const focal of [400,772]){
+    const q=new Quaternion().setFromAxisAngle(new Vector3(1,2,3).normalize(),angle),translation=[3,-4,50];
+    const columns=[[1,0,0],[0,1,0],[0,0,1]].map(p=>new Vector3(...p).applyQuaternion(q).toArray());
+    const rotation=[0,1,2].map(i=>Float32Array.from([0,1,2].map(j=>columns[j][i]*(i===2?-1:1)*(j===2?-1:1))));
+    const pixels=points.map(p=>{const v=new Vector3(...p).applyQuaternion(q).add(new Vector3(...translation));return [v.x*focal/v.z,v.y*focal/v.z];});
+    const solved={ok:true,rotation,translation:Float32Array.from(translation),repError:10000};
+    assert.ok(wristReprojectionError(points,pixels,solved,focal)<1e-5);
+    const moved=pixels.map(p=>[p[0]+40,p[1]]);
+    assert.ok(Math.abs(wristReprojectionError(points,moved,{...solved,repError:0},focal)-40)<1e-5);
+    assert.equal(wristReprojectionError(points,pixels,{...solved,translation:[0,0,-50]},focal),Infinity);
+  }
+});
 
 test('fit profiles persist independently by tracker and model; corrupt/blocked storage stays usable',()=>{
   let data;const storage={getItem:()=>data,setItem:(k,v)=>{data=v;}};

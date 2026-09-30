@@ -6,10 +6,10 @@ import { estimateWristPose, landmarkPoint, WristPoseTracker, smoothingAlpha } fr
 import { HandDetector } from './hand-detector.js?v=5';
 import { HandTarget } from './hand-target.js?v=5';
 import { makeSampleWatch, disposeModel, inspectGLB } from './watch.js?v=6';
-import { WristRig, wristDimensions } from './wrist-rig.js?v=6';
+import { WristRig, wristDimensions } from './wrist-rig.js?v=71';
 
 import { FIT_CONTROLS, FitSettings, defaultFit } from './fit-settings.js?v=7';
-import { WristDetector } from './wrist-detector.js?v=7';
+import { WristDetector } from './wrist-detector.js?v=71';
 import { directWristPose, DirectWristTracker } from './direct-wrist-pose.js?v=7';
 
 const $ = id => document.getElementById(id);
@@ -199,11 +199,13 @@ function detectWrist(result, time) {
   wristTracker.update(next, time);
   detections++;
   if (time - fpsStart >= 1200) { $('fps').textContent = Math.round(detections * 1000 / (time - fpsStart)) + ' 회/초'; fpsStart = time; detections = 0; }
-  const d = wristTracker.diagnostics;
-  $('tracking-label').textContent = ({ tracking: '손목 주변을 직접 따라가고 있어요', 'orientation-held': '위치를 따라가며 회전을 확인하고 있어요', reacquiring: '손목 방향을 확인하고 있어요', 'target-lost': '같은 손목을 보여 주세요 · 손목 다시 찾기로 대상 변경', missing: '손등 쪽 손목과 팔을 보여 주세요' })[d.state];
+  const d = !next && result?.landmarks?.length ? { ...wristTracker.diagnostics, state: 'pose-rejected' } : wristTracker.diagnostics;
+  $('tracking-label').textContent = ({ tracking: '손목 주변을 직접 따라가고 있어요', 'orientation-held': '위치를 따라가며 회전을 확인하고 있어요', reacquiring: '손목 방향을 확인하고 있어요', 'target-lost': '같은 손목을 보여 주세요 · 손목 다시 찾기로 대상 변경', 'pose-rejected': '손목은 찾았어요 · 손등을 보여 주며 잠깐 유지해 주세요', missing: '손등 쪽 손목과 팔을 보여 주세요' })[d.state];
   debugFrame = { wrist: result, next, time };
   if ($('debug').checked) {
-    $('debug-info').textContent = '손목 직접 추적 · ' + d.state + '\n검출 점수 ' + Math.round(Math.min(1, Math.max(0, result?.detected || 0)) * 100) + '% · 투영 일치도 ' + Math.round(d.quality * 100) + '% · 실제 정확도 점수는 아닙니다.';
+    const phase = ({tracking:'표시 중','orientation-held':'위치 추적 · 회전 보류',reacquiring:'안정된 자세 확인 중','target-lost':'대상 재확인 필요','pose-rejected':'검출됨 · 자세 검사 탈락',missing:'손목 미검출'})[d.state];
+    const error = result?.solved?.repError;
+    $('debug-info').textContent = '손목 직접 추적 · ' + phase + '\n검출 점수 ' + Math.round(Math.min(1, Math.max(0, result?.detected || 0)) * 100) + '% · 투영 일치도 ' + Math.round(d.quality * 100) + '%' + (Number.isFinite(error) ? '\n현재 프레임의 기준점 배치 오차 ' + error.toFixed(1) + 'px' : '') + '\n실제 정확도 점수는 아닙니다.';
     diagnosticRecords.push({ time, backend: 'wrist-WebGL', fit: values, wrist: result, diagnostic: d, position: wristTracker.pose?.position.toArray(), rotation: wristTracker.pose?.rotation.toArray() });
     if (diagnosticRecords.length > 600) diagnosticRecords.shift();
     $('save-diagnostics').disabled = false;
@@ -357,7 +359,7 @@ $('calibrate').addEventListener('click', () => {
 });
 $('save-diagnostics').addEventListener('click',()=>{
   if(!diagnosticRecords.length)return;
-  const blob=new Blob([JSON.stringify({version:'0.7',engine,recordedAt:new Date().toISOString(),frames:diagnosticRecords})],{type:'application/json'});
+  const blob=new Blob([JSON.stringify({version:'0.7.1',engine,recordedAt:new Date().toISOString(),frames:diagnosticRecords})],{type:'application/json'});
   const url=URL.createObjectURL(blob), link=document.createElement('a');link.href=url;link.download='wrist-diagnostics.json';link.click();setTimeout(()=>URL.revokeObjectURL(url),1000);
 });
 $('start').addEventListener('click', () => mode === 'idle' ? startCamera() : stopCamera());
