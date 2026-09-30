@@ -149,7 +149,7 @@ export class WristPoseTracker {
     this.calibrationRotation = null; this.calibrationHeading = 0;
     this.lastRotationGood = -Infinity; this.lastInput = -Infinity;
     this.previousRotation = null; this.rotationVelocity = new Vector3(); this.recovery = null; this.branchEvidence = null;
-    this.surfaceEvidence = null;
+    this.surfaceEvidence = null; this.turnEvidence = null;
     this.depthEvidence = null; this.depthBlocked = false;
     this.diagnostics = { state: 'calibrating', quality: 0, progress: 0 };
   }
@@ -168,9 +168,9 @@ export class WristPoseTracker {
       // Discard provisional position history before the first visible pose.
       this.pose = null;
     }
-    if (next.rotationQuality < 0.5) { this.branchEvidence = null; this.surfaceEvidence = null; this.depthEvidence = null; return null; }
+    if (next.rotationQuality < 0.5) { this.branchEvidence = null; this.surfaceEvidence = null; this.depthEvidence = null; this.turnEvidence = null; return null; }
     const projection = fitPalmProjection(this.template, next.imagePalm);
-    if (!projection) { this.surfaceEvidence = null; this.depthEvidence = null; return null; }
+    if (!projection) { this.surfaceEvidence = null; this.depthEvidence = null; this.turnEvidence = null; return null; }
     const raw = this.orientationSign === 1 ? next.rotation.clone() : next.rotation.clone().multiply(halfTurn);
     const candidates = projection.rotations.map(q=>this.orientationSign === 1 ? q : q.multiply(halfTurn));
     // Display expiry and orientation memory are different. A short occlusion
@@ -197,6 +197,29 @@ export class WristPoseTracker {
     const quality = Math.exp(-((projection.residual/0.07)**2));
     const fittedNormalZ = projection.normalZ*this.orientationSign;
     const rawNormalZ = Z.clone().applyQuaternion(raw).z;
+    const depth = next.depthRotation?.clone();
+    if (depth && this.orientationSign === -1) depth.multiply(halfTurn);
+    // Rear-camera fast reversals can cross the old per-frame confirmation
+    // threshold before it accumulates evidence. Hold the first contradiction
+    // instead of accepting the predicted branch and reinforcing its velocity.
+    // Both depth outputs share a model; require temporal agreement too.
+    let turnPending = false, turnRealigned = false;
+    const turn = this.turnEvidence;
+    const delta = previous && rawChoice.clone().multiply(previous.clone().invert());
+    if (delta?.w < 0) delta.set(-delta.x,-delta.y,-delta.z,-delta.w);
+    const opposesMotion = delta && new Vector3(delta.x,delta.y,delta.z).dot(this.rotationVelocity) < -0.015;
+    const localTurn = previous && Math.abs(Z.clone().applyQuaternion(previous).z) > .7 && rawChoice.angleTo(previous) < 1.05;
+    const continuingTurn = turn && time-turn.time <= 160 && rawChoice.angleTo(turn.rotation) < Math.min(1.05,.2+(time-turn.time)*.018);
+    const turnConflict = !next.mirror && previous && age <= 220 && speed > 1.2 && depth && quality >= .8 &&
+      rawChoice !== rotation && opposesMotion && (continuingTurn || (age <= 150 && localTurn)) &&
+      rawChoice.angleTo(raw) < .25 && rawChoice.angleTo(depth) < .25 &&
+      rotation.angleTo(raw)-rawChoice.angleTo(raw) > .25 && rotation.angleTo(depth)-rawChoice.angleTo(depth) > .25;
+    if (turnConflict) {
+      this.turnEvidence = { rotation:rawChoice.clone(), time, started:continuingTurn?turn.started:time, count:continuingTurn?turn.count+1:1 };
+      if (this.turnEvidence.count >= 2 && time-this.turnEvidence.started >= 50) {
+        rotation = rawChoice; branchConfirmed = true; turnRealigned = true; this.turnEvidence = null;
+      } else turnPending = true;
+    } else this.turnEvidence = null;
     // Re-localize at either broad surface only when image geometry and world
     // pose agree for several frames. Side views, curls, a single bad frame,
     // or changing depth branches cannot provide this independent reference.
@@ -215,8 +238,6 @@ export class WristPoseTracker {
     // depth branch. Front cameras can reselect it from sustained, unambiguous
     // agreement of both depth outputs; one frame cannot reverse the watch.
     let depthPending = false, depthRealigned = false;
-    const depth = next.depthRotation?.clone();
-    if (depth && this.orientationSign === -1) depth.multiply(halfTurn);
     const other = candidates.find(q=>q!==rawChoice);
     const evidence = this.depthEvidence;
     const depthConflict = next.mirror && depth && previous && !clearSurface && quality >= 0.45 &&
@@ -239,9 +260,11 @@ export class WristPoseTracker {
       quality, progress: 1, residual: projection.residual, disagreement, rawNormalZ,
       fittedNormalZ, surface:Math.abs(fittedNormalZ)>=0.86?surface:'edge', surfaceConfirmed, surfaceRealigned,
       memoryAgeMs: Number.isFinite(age) ? age : null, branchConfirmed,
-      depthPending, depthRealigned, depthEvidenceFrames:this.depthEvidence?.count || 0 };
+      depthPending, depthRealigned, depthEvidenceFrames:this.depthEvidence?.count || 0,
+      turnPending, turnRealigned, turnEvidenceFrames:this.turnEvidence?.count || 0 };
     if (quality < 0.35) { this.recovery = null; this.branchEvidence = null; this.surfaceEvidence = null; return null; }
     if (depthPending) { this.diagnostics.state = 'depth-check'; return null; }
+    if (turnPending) { this.diagnostics.state = 'turn-check'; return null; }
     if (this.previousRotation && age > 220) {
       const longGap = age > 1500;
       const separated = candidates[0].angleTo(candidates[1]) > 0.5;
@@ -283,7 +306,7 @@ export class WristPoseTracker {
     if (!Number.isFinite(time) || time <= this.lastInput) return false;
     const frameDt = clamp((time-this.lastInput)/1000, 0.001, 0.1);
     this.lastInput = time;
-    if (!next) { if (!this.orientationSign) this.initialCalibration.reset(); this.branchEvidence = null; this.surfaceEvidence = null; this.depthEvidence = null; this.diagnostics = { state: 'missing', quality: 0, progress: this.orientationSign ? 1 : 0 }; return false; }
+    if (!next) { if (!this.orientationSign) this.initialCalibration.reset(); this.branchEvidence = null; this.surfaceEvidence = null; this.depthEvidence = null; this.turnEvidence = null; this.diagnostics = { state: 'missing', quality: 0, progress: this.orientationSign ? 1 : 0 }; return false; }
     next = { ...next };
     const oriented = this.orientedRotation(next, time);
     // A failed rotation fit also makes its inferred scale/anchor untrustworthy.
@@ -321,7 +344,7 @@ export class WristPoseTracker {
     }
     this.pendingPose = null;
     const depthReset = this.diagnostics.depthRealigned && this.depthBlocked;
-    if (!depthReset && oriented && this.previousRotation && this.previousRotation.angleTo(oriented) > 1.3+dt*4 && (!this.pendingRotation || this.pendingRotation.angleTo(oriented) > 0.45)) {
+    if (!depthReset && !this.diagnostics.turnRealigned && oriented && this.previousRotation && this.previousRotation.angleTo(oriented) > 1.3+dt*4 && (!this.pendingRotation || this.pendingRotation.angleTo(oriented) > 0.45)) {
       this.pendingRotation = oriented.clone(); this.diagnostics.state = 'outlier'; return false;
     }
     this.pendingRotation = null;
@@ -351,6 +374,7 @@ export class WristPoseTracker {
       this.pose.rotation.rotateTowards(filtered, rateLimit*frameDt);
       if (time-this.lastRotationGood > 220 || depthReset) this.pose.rotation.copy(oriented);
       if (depthReset) { this.previousRotation = null; this.rotationVelocity.set(0,0,0); this.angularSpeed = 0; }
+      if (this.diagnostics.turnRealigned) this.rotationVelocity.set(0,0,0);
       this.acceptRotation(oriented, time);
     }
     this.previous.copy(next.position); this.lastGood = time;

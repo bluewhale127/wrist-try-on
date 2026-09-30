@@ -267,6 +267,88 @@ test('motion memory permits real reversals at the palm-facing turning point',()=
     assert.ok(tracker.sample(time));
   }
 });
+
+function rearTurnFixture({right=false, heading=0}={}) {
+  const headingRotation=new Quaternion().setFromAxisAngle(new Vector3(0,0,1),heading);
+  const pose=degrees=>{
+    const p=rotationPose(degrees*Math.PI/180,{right});
+    p.rotation.premultiply(headingRotation);p.depthRotation.premultiply(headingRotation);
+    p.imagePalm.forEach(v=>v.applyQuaternion(headingRotation));p.position.applyQuaternion(headingRotation);p.heading+=heading;
+    return p;
+  };
+  const tracker=new WristPoseTracker();
+  for(let t=-2000;t<=0;t+=50)tracker.update(pose(0),t);
+  assert.ok(tracker.orientationSign);
+  const origin=tracker.previousRotation.clone().invert(),axis=new Vector3(0,1,0).applyQuaternion(headingRotation);
+  const angle=(q,previous)=>{
+    const d=q.clone().multiply(origin),raw=2*Math.atan2(new Vector3(d.x,d.y,d.z).dot(axis),d.w)*180/Math.PI;
+    return previous+((raw-previous+540)%360)-180;
+  };
+  return {tracker,pose,angle};
+}
+
+test('fast rear out-and-back turns cannot accumulate a false full revolution',()=>{
+  for(const right of [false,true])for(const heading of [0,Math.PI/2])for(const direction of [-1,1])
+  for(const dt of [33,67,100])for(const step of [15,30,45])for(const peak of [150,170,180]){
+    const {tracker,pose,angle}=rearTurnFixture({right,heading});let time=0,selected=0,displayed=0;
+    const sequence=[];for(let a=step;a<peak;a+=step)sequence.push(a);sequence.push(peak);
+    for(let a=peak-step;a>0;a-=step)sequence.push(a);sequence.push(0,...Array(15).fill(0));
+    for(const input of sequence){
+      tracker.update(pose(input*direction),time+=dt);
+      selected=angle(tracker.previousRotation,selected);displayed=angle(tracker.pose.rotation,displayed);
+      const context=`${right}/${heading}/${direction}/${dt}/${step}/${peak}/${input}`;
+      assert.ok(direction*selected>=-1 && direction*selected<=peak+1,`selected ${selected}: ${context}`);
+      assert.ok(direction*displayed>=-1 && direction*displayed<=peak+1,`display ${displayed}: ${context}`);
+      assert.ok(tracker.sample(time),`no disappearance: ${context}`);
+    }
+    assert.ok(Math.abs(displayed)<3);assert.ok(Math.abs(selected)<1);
+  }
+});
+
+test('a rear reversal first holds, then returns instead of reinforcing the old angular velocity',()=>{
+  const {tracker,pose}=rearTurnFixture();let time=0;
+  for(const a of [30,60,90,120,150,180])tracker.update(pose(a),time+=67);
+  const before=tracker.pose.rotation.clone();
+  assert.equal(tracker.update(pose(150),time+=67),false);assert.ok(tracker.diagnostics.turnPending);
+  assert.ok(tracker.pose.rotation.angleTo(before)<1e-8);
+  assert.equal(tracker.update(pose(120),time+=67),true);assert.ok(tracker.diagnostics.turnRealigned);
+  assert.ok(tracker.rotationVelocity.y<0);assert.equal(tracker.turnEvidence,null);
+});
+
+test('one false rear depth reversal cannot flip a continuing turn',()=>{
+  const {tracker,pose}=rearTurnFixture();let time=0;
+  for(const a of [30,60,90,120,150,180])tracker.update(pose(a),time+=67);
+  const bad=pose(210);bad.rotation.copy(pose(150).rotation);bad.depthRotation.copy(pose(150).depthRotation);
+  tracker.update(bad,time+=67);assert.ok(tracker.diagnostics.turnPending);
+  tracker.update(pose(240),time+=67);
+  assert.ok(!tracker.diagnostics.turnRealigned);assert.equal(tracker.turnEvidence,null);
+  assert.ok(tracker.previousRotation.angleTo(pose(240).rotation)<1e-6);
+});
+
+test('rear reversal confirmation rejects conflicting depth and resets after interrupted observations',()=>{
+  for(const kind of ['depth','missing','quality']){
+    const {tracker,pose}=rearTurnFixture();let time=0;
+    for(const a of [30,60,90,120,150,180])tracker.update(pose(a),time+=67);
+    if(kind==='depth'){
+      const p=pose(150);p.depthRotation.copy(pose(210).depthRotation);tracker.update(p,time+=67);
+      assert.ok(!tracker.diagnostics.turnPending);assert.ok(!tracker.diagnostics.turnRealigned);
+    }else{
+      tracker.update(pose(150),time+=67);assert.ok(tracker.turnEvidence);
+      const p=kind==='missing'?null:pose(140);if(p)p.rotationQuality=0;
+      tracker.update(p,time+=67);assert.equal(tracker.turnEvidence,null);
+    }
+    tracker.reset();assert.equal(tracker.turnEvidence,null);
+  }
+});
+
+test('a fast rear turn can stop at the palm without inventing continued motion',()=>{
+  const {tracker,pose,angle}=rearTurnFixture();let time=0,selected=0,displayed=0;
+  for(const a of [30,60,90,120,150,180,...Array(15).fill(180)]){
+    tracker.update(pose(a),time+=67);selected=angle(tracker.previousRotation,selected);displayed=angle(tracker.pose.rotation,displayed);
+    assert.ok(selected<=180.01);assert.ok(displayed<=180.01);assert.ok(!tracker.diagnostics.turnPending);
+  }
+  assert.ok(Math.abs(displayed-180)<1);
+});
 test('long-loss recovery accepts the original tilted calibration view',()=>{
   const tracker=new WristPoseTracker();
   for(let t=-1800;t<=0;t+=50)tracker.update(rotationPose(0.25),t);
