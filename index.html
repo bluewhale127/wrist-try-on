@@ -11,7 +11,7 @@
 </head>
 <body>
   <main class="app">
-    <header class="header"><div><span class="eyebrow">WRIST / STUDIO</span><h1>손목 위의 시계</h1></div><span class="badge">착용 테스트</span></header>
+    <header class="header"><div><span class="eyebrow">WRIST / STUDIO</span><h1>손목 위의 시계</h1></div><span class="badge">착용 테스트 · 0.7.4</span></header>
     <div class="workspace">
       <section class="viewer" aria-label="시계 착용 화면">
         <div id="stage" class="stage">
@@ -41,6 +41,8 @@
           <label class="slider-label" for="offset">착용 위치 <output id="offset-output">기본</output></label><input id="offset" type="range" min="0.1" max="0.95" step="0.01" value="0.38"><div class="range-hints"><span>손 쪽</span><span>팔 쪽</span></div>
           <label class="slider-label" for="rotation">시계 방향 <output id="rotation-output">90°</output></label><input id="rotation" type="range" min="-180" max="180" step="1" value="90">
           <p class="small">기본 90°: 6시 → 엄지 · 12시 → 새끼손가락. 손등 기준을 맞추면 자동 정렬됩니다.</p>
+          <button id="align-dial" class="text-button" type="button">6·12시 방향 다시 맞추기</button>
+          <p class="small">시계 방향과 기울기를 기본값으로 맞춥니다. 크기·착용 위치·손목 너비는 유지합니다.</p>
           <label class="check-label"><input id="occlusion" type="checkbox" checked>손목 뒤 스트랩 가리기 <span>근사 처리</span></label>
           <details id="wrist-fit"><summary>손목에 감기도록 맞추기</summary><p class="small">손목을 타원형 원기둥으로 추정합니다. 모형을 켜고 손등에서 너비, 옆면에서 두께를 맞춰 주세요. 임시 시계의 스트랩이 함께 감깁니다.</p>
             <label class="check-label"><input id="wrist-guide" type="checkbox">손목 모형 보기</label>
@@ -53,8 +55,8 @@
         <p class="note">크기는 시각적으로 추정합니다. 실제 치수 측정용은 아니며, 손목을 크게 돌리면 정렬이 흐트러질 수 있습니다.</p>
       </aside>
     </div>
-    <footer>Wrist Studio 0.7.3 · Android Chrome 기준 · 영상은 기기 안에서 처리됩니다</footer>
+    <footer>Wrist Studio 0.7.4 · Android Chrome 기준 · 영상은 기기 안에서 처리됩니다</footer>
   </main>
-  <script type="module" src="./app.js?v=73"></script>
+  <script type="module" src="./app.js?v=74"></script>
 </body>
 </html>

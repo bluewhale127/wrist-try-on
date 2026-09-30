@@ -1,7 +1,7 @@
 {
   "name": "wrist-try-on",
   "private": true,
-  "version": "0.7.3",
+  "version": "0.7.4",
   "type": "module",
   "description": "Android browser wrist watch try-on prototype",
   "scripts": {
@@ -18,3 +18,4 @@
   },
   "engines": { "node": ">=20" }
 }
+

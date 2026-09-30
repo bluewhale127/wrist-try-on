@@ -187,7 +187,7 @@ test('6 oclock stays toward thumb and 12 toward pinky for both hands, cameras an
     for(let degrees=0;degrees<=360;degrees+=3){
       const raw=rotationPose(direction*degrees*Math.PI/180,{right,mirror});
       tracker.update(raw,33+degrees*22);
-      const caseRotation=new Quaternion().setFromAxisAngle(new Vector3(0,0,1),watchRotationDegrees(90,sign)*Math.PI/180);
+      const caseRotation=new Quaternion().setFromAxisAngle(new Vector3(0,0,1),watchRotationDegrees(90,tracker.watchOrientationSign)*Math.PI/180);
       const six=new Vector3(0,-1,0).applyQuaternion(caseRotation).applyQuaternion(tracker.pose.rotation);
       const twelve=new Vector3(0,1,0).applyQuaternion(caseRotation).applyQuaternion(tracker.pose.rotation);
       const towardThumb=new Vector3(1,0,0).applyQuaternion(raw.rotation);
@@ -271,6 +271,66 @@ test('long-loss recovery accepts the original tilted calibration view',()=>{
   for(let t=2000;t<=2300;t+=50)tracker.update(rotationPose(0.5),t);
   assert.ok(tracker.sample(2300));
   assert.ok(tracker.pose.rotation.angleTo(rotationPose(0.5).rotation)<0.05);
+});
+
+test('initial world-axis inversion cannot reverse 6 and 12 relative to observed thumb',()=>{
+  for(const right of [false,true])for(const mirror of [false,true]){
+    const observed=rotatedHand(0,right),wrong=rotatedHand(0,!right),tracker=new WristPoseTracker();
+    const pose=()=>estimateWristPose(observed.landmarks,rotationView,{mirror,worldLandmarks:wrong.world});
+    for(let t=-600;t<=0;t+=50)tracker.update(pose(),t);
+    assert.ok(tracker.orientationSign);
+    assert.ok(tracker.template[1].x<tracker.template[4].x);
+    const six=new Vector3(0,-1,0).applyAxisAngle(new Vector3(0,0,1),watchRotationDegrees(90,tracker.watchOrientationSign)*Math.PI/180).applyQuaternion(tracker.pose.rotation).setZ(0).normalize();
+    const radial=pose().imagePalm[1].clone().sub(pose().imagePalm[4]).setZ(0).normalize();
+    assert.ok(six.dot(radial)>0.99);
+  }
+});
+
+test('a stable palm-facing surface restores pose after long loss on both hands and cameras',()=>{
+  for(const right of [false,true])for(const mirror of [false,true]){
+    const options={right,mirror},tracker=calibratedTracker(options),template=tracker.template,sign=tracker.orientationSign;
+    const palm=()=>{const pose=rotationPose(Math.PI,options);pose.position.add(new Vector3(90,35,0));return pose;};
+    tracker.update(null,1800);
+    for(let t=2000;t<2300;t+=50){tracker.update(palm(),t);assert.equal(tracker.sample(t),null);}
+    tracker.update(palm(),2300);assert.ok(tracker.sample(2300));assert.ok(tracker.diagnostics.surfaceConfirmed);
+    assert.equal(tracker.diagnostics.surface,'palm');assert.equal(tracker.orientationSign,sign);assert.equal(tracker.template,template);
+    assert.ok(new Vector3(0,0,1).applyQuaternion(tracker.pose.rotation).z<-.99);
+    assert.ok(wristSurfacePosition(tracker.pose.position,tracker.pose.rotation,30).z< -29);
+    assert.ok(tracker.pose.position.distanceTo(palm().position)<1e-6);
+  }
+});
+
+test('side views, inconsistent depth and alternating surfaces cannot trigger palm recovery',()=>{
+  const palmHand=rotatedHand(Math.PI),wrong=rotatedHand(0);
+  for(const kind of ['side','depth','alternating']){
+    const tracker=calibratedTracker();tracker.update(null,1800);
+    for(let t=2000;t<=2800;t+=50){
+      const pose=kind==='depth'?estimateWristPose(palmHand.landmarks,rotationView,{worldLandmarks:wrong.world}):rotationPose(kind==='side'?2.1:Math.floor(t/100)%2?Math.PI:0);
+      tracker.update(pose,t);assert.equal(tracker.sample(t),null,`${kind}/${t}`);assert.ok(!tracker.diagnostics.surfaceConfirmed);
+    }
+  }
+});
+
+test('clear sustained surface evidence can repair a stuck depth branch without a visible snap',()=>{
+  for(const mirror of [false,true]){
+    const tracker=calibratedTracker({mirror});let time=0;
+    for(let i=1;i<=15;i++){time+=50;tracker.update(rotationPose(i*.03,{mirror}),time);}
+    let confirmed=false;
+    for(let i=1;i<=16;i++){
+      time+=50;const before=tracker.pose.rotation.clone();tracker.update(rotationPose(-.45,{mirror}),time);
+      confirmed ||= tracker.diagnostics.surfaceRealigned;
+      assert.ok(before.angleTo(tracker.pose.rotation)<.33,'bounded visible correction');
+    }
+    assert.ok(confirmed);assert.ok(tracker.pose.rotation.angleTo(new Quaternion().setFromAxisAngle(new Vector3(0,1,0),mirror?.45:-.45))<.12);
+  }
+});
+
+test('a missing frame cancels accumulated surface confirmation',()=>{
+  const tracker=calibratedTracker();tracker.update(null,1800);
+  for(let t=2000;t<=2250;t+=50)tracker.update(rotationPose(Math.PI),t);
+  tracker.update(null,2300);
+  for(let t=2350;t<2650;t+=50){tracker.update(rotationPose(Math.PI),t);assert.equal(tracker.sample(t),null);}
+  tracker.update(rotationPose(Math.PI),2650);assert.ok(tracker.sample(2650));
 });
 
 function detectedHands(...hands) {

@@ -110,6 +110,13 @@ function cutoffAlpha(dt, hz) { return 1 - Math.exp(-2 * Math.PI * hz * dt); }
 // Hold only brief gaps; never extrapolate a watch indefinitely after a hand leaves the frame.
 export class WristPoseTracker {
   constructor() { this.reset(); }
+  get watchOrientationSign() {
+    // A bad initial world frame can unproject the thumb into template -X.
+    // The observed template ordering, not the world frame alone, decides
+    // which side of the final dorsal frame the six-o'clock marker belongs on.
+    const radial = this.template ? this.template[1].x-this.template[4].x : 1;
+    return (this.orientationSign || 1) * (radial < 0 ? -1 : 1);
+  }
   reset() {
     this.pose = null; this.previous = null; this.lastGood = -Infinity; this.speed = 0;
     this.velocity = new Vector3(); this.pending = null; this.pendingRotation = null;
@@ -119,11 +126,12 @@ export class WristPoseTracker {
     this.calibrationRotation = null; this.calibrationHeading = 0;
     this.lastRotationGood = -Infinity; this.lastInput = -Infinity;
     this.previousRotation = null; this.rotationVelocity = new Vector3(); this.recovery = null; this.branchEvidence = null;
+    this.surfaceEvidence = null;
     this.diagnostics = { state: 'calibrating', quality: 0, progress: 0 };
   }
   orientedRotation(next, time) {
     this.diagnostics = { state: 'uncertain', quality: 0, progress: this.orientationSign ? 1 : 0 };
-    if (next.rotationQuality < 0.5) { this.branchEvidence = null; return null; }
+    if (next.rotationQuality < 0.5) { this.branchEvidence = null; this.surfaceEvidence = null; return null; }
     if (!this.orientationSign) {
       const normalZ = Z.clone().applyQuaternion(next.rotation).z;
       const template = Math.abs(normalZ) >= 0.6 && palmTemplate(next.imagePalm, next.rotation);
@@ -146,7 +154,7 @@ export class WristPoseTracker {
       this.templates = [];
     }
     const projection = fitPalmProjection(this.template, next.imagePalm);
-    if (!projection) return null;
+    if (!projection) { this.surfaceEvidence = null; return null; }
     const raw = this.orientationSign === 1 ? next.rotation.clone() : next.rotation.clone().multiply(halfTurn);
     const candidates = projection.rotations.map(q=>this.orientationSign === 1 ? q : q.multiply(halfTurn));
     // Display expiry and orientation memory are different. A short occlusion
@@ -171,28 +179,44 @@ export class WristPoseTracker {
       if (this.branchEvidence.count >= 3 && time-this.branchEvidence.started >= 100 && rawChoice.angleTo(previous) < 0.7) { rotation = rawChoice; branchConfirmed = true; }
     } else this.branchEvidence = null;
     const quality = Math.exp(-((projection.residual/0.07)**2));
+    const fittedNormalZ = projection.normalZ*this.orientationSign;
+    const rawNormalZ = Z.clone().applyQuaternion(raw).z;
+    // Re-localize at either broad surface only when image geometry and world
+    // pose agree for several frames. Side views, curls, a single bad frame,
+    // or changing depth branches cannot provide this independent reference.
+    const surface = fittedNormalZ >= 0 ? 'back' : 'palm';
+    const clearSurface = quality >= 0.85 && Math.abs(fittedNormalZ) >= 0.86 && Math.abs(rawNormalZ) >= 0.75 && fittedNormalZ*rawNormalZ > 0 && rawChoice.angleTo(raw) < 0.35;
+    if (clearSurface) {
+      const evidence = this.surfaceEvidence;
+      const stable = evidence && evidence.surface === surface && time-evidence.time <= 180 && evidence.rotation.angleTo(rawChoice) < 0.18 && evidence.position.distanceTo(next.position) < next.wristRadius/0.46*0.3;
+      this.surfaceEvidence = { surface, rotation:rawChoice.clone(), position:next.position.clone(), time, started:stable?evidence.started:time, count:stable?evidence.count+1:1 };
+    } else this.surfaceEvidence = null;
+    const surfaceConfirmed = !!this.surfaceEvidence && this.surfaceEvidence.count >= 4 && time-this.surfaceEvidence.started >= 300;
+    const surfaceRealigned = surfaceConfirmed && rotation.angleTo(rawChoice) > 0.35;
+    if (surfaceRealigned) { rotation = rawChoice; branchConfirmed = true; }
     const disagreement = rotation.angleTo(raw);
     this.diagnostics = { state: quality < 0.35 ? 'uncertain' : disagreement > 0.6 ? 'corrected' : 'tracking',
-      quality, progress: 1, residual: projection.residual, disagreement, rawNormalZ: Z.clone().applyQuaternion(raw).z,
-      fittedNormalZ: projection.normalZ*this.orientationSign, memoryAgeMs: Number.isFinite(age) ? age : null, branchConfirmed };
-    if (quality < 0.35) { this.recovery = null; this.branchEvidence = null; return null; }
+      quality, progress: 1, residual: projection.residual, disagreement, rawNormalZ,
+      fittedNormalZ, surface:Math.abs(fittedNormalZ)>=0.86?surface:'edge', surfaceConfirmed, surfaceRealigned,
+      memoryAgeMs: Number.isFinite(age) ? age : null, branchConfirmed };
+    if (quality < 0.35) { this.recovery = null; this.branchEvidence = null; this.surfaceEvidence = null; return null; }
     if (this.previousRotation && age > 220) {
       const longGap = age > 1500;
       const separated = candidates[0].angleTo(candidates[1]) > 0.5;
       const ambiguous = previous && separated && Math.abs(candidates[0].angleTo(previous) - candidates[1].angleTo(previous)) < 0.12;
       const tooFar = previous && rotation.angleTo(previous) > Math.min(1.2, 0.45 + age * 0.001);
-      // Once motion is unknowable, ask for a stable back-of-hand view. Do not
-      // guess a half-turn that happened while the hand was hidden.
+      // Preserve the existing dorsal recovery, and also admit a confirmed
+      // palm-facing anchor. Its dial stays on the back of the wrist, occluded.
       const backFacing = this.diagnostics.fittedNormalZ > 0.55 && this.diagnostics.rawNormalZ > 0.5;
       const nearReference = rotation.angleTo(recoveryReference) < 0.65 || this.diagnostics.fittedNormalZ > 0.95;
-      if ((longGap && (!backFacing || !nearReference)) || ambiguous || tooFar) {
+      if (!surfaceConfirmed && ((longGap && (!backFacing || !nearReference)) || ambiguous || tooFar)) {
         this.recovery = null; this.diagnostics.state = 'reorient'; return null;
       }
       if (!this.recovery || time-this.recovery.time > 200 || this.recovery.rotation.angleTo(rotation) > 0.3) {
         this.recovery = { rotation: rotation.clone(), started: time, time, count: 1 };
       } else { this.recovery.rotation.copy(rotation); this.recovery.time = time; this.recovery.count++; }
       this.diagnostics.state = longGap ? 'reorient' : 'reacquiring';
-      if (this.recovery.count < 3 || time-this.recovery.started < (longGap ? 250 : 60)) return null;
+      if (!surfaceConfirmed && (this.recovery.count < 3 || time-this.recovery.started < (longGap ? 250 : 60))) return null;
     }
     // One calibrated palm width drives both size and wrist radius. Learned bone
     // lengths can change when fingers overlap; they must not resize the wrist.
@@ -216,7 +240,7 @@ export class WristPoseTracker {
     if (!Number.isFinite(time) || time <= this.lastInput) return false;
     const frameDt = clamp((time-this.lastInput)/1000, 0.001, 0.1);
     this.lastInput = time;
-    if (!next) { this.branchEvidence = null; this.diagnostics = { state: 'missing', quality: 0, progress: this.orientationSign ? 1 : 0 }; return false; }
+    if (!next) { this.branchEvidence = null; this.surfaceEvidence = null; this.diagnostics = { state: 'missing', quality: 0, progress: this.orientationSign ? 1 : 0 }; return false; }
     next = { ...next };
     const oriented = this.orientedRotation(next, time);
     // A failed rotation fit also makes its inferred scale/anchor untrustworthy.

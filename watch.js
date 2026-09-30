@@ -24,6 +24,14 @@ export function makeSampleWatch() {
     tick.position.set(Math.sin(angle) * 0.348, Math.cos(angle) * 0.348, 0.177);
     tick.rotation.z = -angle; group.add(tick);
   }
+  // Visible dial labels make a half-turn distinguishable from hand movement.
+  if (typeof document !== 'undefined') for (const [text, y, width] of [['12',0.25,0.14],['6',-0.25,0.09]]) {
+    const canvas=document.createElement('canvas');canvas.width=256;canvas.height=160;
+    const context=canvas.getContext('2d');context.fillStyle='#d1eee4';context.font='600 120px sans-serif';context.textAlign='center';context.textBaseline='middle';context.fillText(text,128,84);
+    const texture=new THREE.CanvasTexture(canvas);texture.colorSpace=THREE.SRGBColorSpace;
+    const label=new THREE.Mesh(new THREE.PlaneGeometry(width,0.09),new THREE.MeshBasicMaterial({map:texture,transparent:true,depthWrite:false}));
+    label.name=`dial-${text}`;label.position.set(0,y,0.181);group.add(label);
+  }
   for (const [length, width, angle, z] of [[0.22, 0.025, 0.95, 0.185], [0.31, 0.018, -1.05, 0.199]]) {
     const pivot = new THREE.Group(); pivot.rotation.z = angle;
     const hand = new THREE.Mesh(new THREE.BoxGeometry(width, length, 0.012), bright);
