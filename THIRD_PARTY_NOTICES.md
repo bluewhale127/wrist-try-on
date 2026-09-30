@@ -18,16 +18,6 @@
 - Hand Landmarker model, float16, version 1: https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task
 - Model documentation: https://ai.google.dev/edge/mediapipe/solutions/vision/hand_landmarker
 
-## WebAR.rocks.hand experimental wrist tracker
-
-- Source: https://github.com/WebAR-rocks/WebAR.rocks.hand
-- Pinned revision: `4e168a652f7bee6e63e3cb6e6732df40ed709f8d`
-- MIT license, included in `vendor/wrist/LICENSE`.
-- Only `dist/WebARRocksHand.module.js`, `neuralNets/NN_WRISTBACK_45.json` and the license are downloaded. No demonstration watch or HDR asset is redistributed.
-- `wrist-assets.json` pins SHA-256 checksums. Files are downloaded at build time and served from the application's own host at runtime.
-- Pose coordinate conversion follows the repository's `helpers/HandTrackerThreeHelper.js` and `demos/VTOWatchOnly/main.js`. Our existing Three.js wrist rig renders the watch.
-- This is an optional comparison mode, not a proven improvement over MediaPipe. It is trained for dorsal wrist views and can lose side/palm views.
-
 ## Original reference project
 
 - Project reviewed: https://github.com/VeinSyct/Wrist-AR

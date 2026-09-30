@@ -5,4 +5,3 @@
 @media(prefers-reduced-motion:reduce){*{scroll-behavior:auto!important}}
 #tracking-debug[hidden]{display:none}#tracking-debug{z-index:1}.stage-top,.stage-bottom{z-index:2}#debug-info{font-variant-numeric:tabular-nums;white-space:pre-line}
 
-.engine-picker{margin-top:18px}.engine-picker label{display:block;font-size:.875rem;color:#d9e7eb;margin-bottom:8px}.engine-picker select{width:100%;font:inherit;color:#eef5f7;background:#243038;border:1px solid #46565e;border-radius:10px;padding:12px}.engine-picker p,#fit-saved{margin-top:10px}.engine-picker select:focus-visible{outline:2px solid var(--accent);outline-offset:3px}

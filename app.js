@@ -9,17 +9,14 @@ import { makeSampleWatch, disposeModel, inspectGLB } from './watch.js?v=6';
 import { WristRig, wristDimensions } from './wrist-rig.js?v=71';
 
 import { FIT_CONTROLS, FitSettings, defaultFit } from './fit-settings.js?v=7';
-import { WristDetector } from './wrist-detector.js?v=71';
-import { directWristPose, DirectWristTracker } from './direct-wrist-pose.js?v=7';
 
 const $ = id => document.getElementById(id);
 const video = $('camera'), stage = $('stage'), status = $('status'), errorBox = $('error');
 const controls = FIT_CONTROLS;
-let engine = 'hand', modelKey = 'sample', defaults = defaultFit(engine);
+const engine = 'hand', defaults = defaultFit(engine);
+let modelKey = 'sample';
 let storage; try { storage = window.localStorage; } catch {}
 const fitSettings = new FitSettings(storage);
-let wristDetector = null, wristClosing = Promise.resolve();
-const wristTracker = new DirectWristTracker();
 let renderer, scene, camera, anchor, adjustment, occluder, watch;
 let mediaStream = null, mode = 'idle', operation = 0, facingMode = 'environment', mirror = false;
 let handLandmarker = null, detectorPromise = null;
@@ -74,15 +71,13 @@ function updateMode(next) {
   $('camera-label').textContent = next === 'idle' ? '카메라 꺼짐' : next === 'loading' ? '준비 중' : mirror ? '전면 카메라' : '후면 카메라';
   $('tracking-label').textContent = next === 'idle' ? '3D 미리보기 · 카메라 꺼짐' : next === 'loading' ? '손 추적을 준비하고 있어요' : '손등과 손가락, 손목을 보여 주세요';
   $('fps').textContent = '';
-  tracker.reset(); wristTracker.reset(); handTarget.reset(); poseInitialized = false;
+  tracker.reset(); handTarget.reset(); poseInitialized = false;
   debugFrame = null; debugContext.clearRect(0, 0, width, height);
   if (next === 'idle') $('debug-info').textContent = '카메라가 꺼졌습니다. 남아 있는 진단 기록은 저장할 수 있어요.';
   if (next === 'loading') { diagnosticRecords = []; $('save-diagnostics').disabled = true; }
 }
 function stopCamera(message = '카메라를 껐습니다. 시계 모델을 계속 살펴볼 수 있어요.') {
   operation++;
-  if (wristDetector) wristClosing = wristDetector.close();
-  wristDetector = null;
   const old = mediaStream;
   mediaStream = null;
   if (old) for (const track of old.getTracks()) track.stop();
@@ -111,8 +106,6 @@ async function startCamera() {
   notice('카메라 사용을 허용해 주세요. 처음에는 손 추적 모델을 준비하는 데 시간이 걸릴 수 있습니다.');
   let acquired = null;
   try {
-    await wristClosing;
-    if (id !== operation) return;
     acquired = await navigator.mediaDevices.getUserMedia({ audio: false, video: { facingMode: { ideal: facingMode }, width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 30, max: 30 } } });
     if (id !== operation) { acquired.getTracks().forEach(t => t.stop()); return; }
     mediaStream = acquired;
@@ -124,21 +117,14 @@ async function startCamera() {
     if (id !== operation) return;
     stage.classList.add('live');
     notice('손 추적을 준비하고 있습니다. 잠시만 기다려 주세요.');
-    if (engine === 'hand') await loadDetector();
-    else {
-      const detector = new WristDetector(); wristDetector = detector;
-      await detector.initialize(video, (result, time) => {
-        if (id !== operation || mode !== 'live') return;
-        detectWrist(result, time);
-      });
-    }
+    await loadDetector();
     if (id !== operation) return;
     for (const track of acquired.getVideoTracks()) track.addEventListener('ended', () => {
       if (mediaStream === acquired) stopCamera('카메라 연결이 종료됐습니다. 카메라 시작을 눌러 다시 연결해 주세요.');
     }, { once: true });
     lastVideoTime = -1; lastDetection = 0; fpsStart = performance.now(); detections = 0;
     updateMode('live');
-    notice(engine === 'wrist' ? '손등 쪽 손목과 팔을 함께 보여 주세요. 손목 직접 추적을 시험 중입니다.' : '손등과 손가락을 카메라 쪽으로 편하게 펴고 1초 정도 유지해 주세요. 다른 손으로 바꾸면 손등 기준을 다시 맞춰 주세요.');
+    notice('손등과 손가락을 카메라 쪽으로 편하게 펴고 1초 정도 유지해 주세요. 다른 손으로 바꾸면 손등 기준을 다시 맞춰 주세요.');
   } catch (error) {
     if (id !== operation) { acquired?.getTracks().forEach(t => t.stop()); return; }
     stopCamera();
@@ -193,31 +179,13 @@ async function detect(time) {
     if (id === operation && mode === 'live') { stopCamera(); notice('손 추적이 중단되었습니다. 카메라를 다시 시작해 주세요.', true); console.error(error); }
   } finally { detecting = false; }
 }
-function detectWrist(result, time) {
-  const values = fit();
-  const next = directWristPose(result, { width, height }, { mirror, scale: values.scale, offset: values.offset });
-  wristTracker.update(next, time);
-  detections++;
-  if (time - fpsStart >= 1200) { $('fps').textContent = Math.round(detections * 1000 / (time - fpsStart)) + ' 회/초'; fpsStart = time; detections = 0; }
-  const d = !next && result?.landmarks?.length ? { ...wristTracker.diagnostics, state: 'pose-rejected' } : wristTracker.diagnostics;
-  $('tracking-label').textContent = ({ tracking: '손목 주변을 직접 따라가고 있어요', 'orientation-held': '위치를 따라가며 회전을 확인하고 있어요', reacquiring: '손목 방향을 확인하고 있어요', 'target-lost': '같은 손목을 보여 주세요 · 손목 다시 찾기로 대상 변경', 'pose-rejected': '손목은 찾았어요 · 손등을 보여 주며 잠깐 유지해 주세요', missing: '손등 쪽 손목과 팔을 보여 주세요' })[d.state];
-  debugFrame = { wrist: result, next, time };
-  if ($('debug').checked) {
-    const phase = ({tracking:'표시 중','orientation-held':'위치 추적 · 회전 보류',reacquiring:'안정된 자세 확인 중','target-lost':'대상 재확인 필요','pose-rejected':'검출됨 · 자세 검사 탈락',missing:'손목 미검출'})[d.state];
-    const error = result?.solved?.repError;
-    $('debug-info').textContent = '손목 직접 추적 · ' + phase + '\n검출 점수 ' + Math.round(Math.min(1, Math.max(0, result?.detected || 0)) * 100) + '% · 투영 일치도 ' + Math.round(d.quality * 100) + '%' + (Number.isFinite(error) ? '\n현재 프레임의 기준점 배치 오차 ' + error.toFixed(1) + 'px' : '') + '\n실제 정확도 점수는 아닙니다.';
-    diagnosticRecords.push({ time, backend: 'wrist-WebGL', fit: values, wrist: result, diagnostic: d, position: wristTracker.pose?.position.toArray(), rotation: wristTracker.pose?.rotation.toArray() });
-    if (diagnosticRecords.length > 600) diagnosticRecords.shift();
-    $('save-diagnostics').disabled = false;
-  }
-}
 function render(time) {
   animationId = requestAnimationFrame(render);
   if (!renderer || document.hidden) return;
   const dt = (time - previousFrame) / 1000;
   previousFrame = time;
   const values = fit();
-  if (mode === 'live' && engine === 'hand') {
+  if (mode === 'live') {
     void detect(time);
   }
   if (mode === 'idle') {
@@ -228,9 +196,8 @@ function render(time) {
     anchor.rotation.set(0.2, reduceMotion ? -0.25 : Math.sin(time * 0.0003) * 0.25 - 0.15, -0.08);
     occluder.visible = false;
   } else {
-    const activeTracker = engine === 'wrist' ? wristTracker : tracker;
-    const targetPose = activeTracker.sample(time);
-    anchor.visible = mode === 'live' && !!targetPose && !!activeTracker.orientationSign;
+    const targetPose = tracker.sample(time);
+    anchor.visible = mode === 'live' && !!targetPose && !!tracker.orientationSign;
     stage.classList.toggle('tracked', anchor.visible);
     if (anchor.visible) {
       const alpha = poseInitialized ? smoothingAlpha(dt, 40) : 1;
@@ -253,17 +220,6 @@ function drawDiagnostics(time) {
   if (debugCanvas.hidden) return;
   debugContext.clearRect(0,0,width,height);
   if (mode !== 'live' || !debugFrame || time-debugFrame.time>220) return;
-  if (engine === 'wrist') {
-    const r = debugFrame.wrist; if (!r?.landmarks) return;
-    const factor = Math.max(width / r.width, height / r.height);
-    debugContext.fillStyle = '#ffe28c';
-    for (const p of r.landmarks) {
-      const x = width / 2 + (mirror ? -1 : 1) * p[0] * r.width / 2 * factor;
-      const y = height / 2 - p[1] * r.height / 2 * factor;
-      debugContext.beginPath(); debugContext.arc(x, y, 4, 0, Math.PI * 2); debugContext.fill();
-    }
-    return;
-  }
   if (!debugFrame.landmarks) return;
   const view={width,height,videoWidth:video.videoWidth,videoHeight:video.videoHeight};
   const point=p=>[p.x+width/2,height/2-p.y];
@@ -341,7 +297,7 @@ try {
     renderer.setSize(width, height, false);
     debugCanvas.width = Math.round(width); debugCanvas.height = Math.round(height);
     camera.left = -width / 2; camera.right = width / 2; camera.top = height / 2; camera.bottom = -height / 2; camera.updateProjectionMatrix();
-    tracker.reset(); wristTracker.reset(); wristDetector?.reset(); poseInitialized = false;
+    tracker.reset(); poseInitialized = false;
   }).observe(stage);
   animationId = requestAnimationFrame(render);
 } catch (error) {
@@ -353,13 +309,13 @@ for (const id of controls) $(id).addEventListener('input', () => { updateFit(); 
 $('occlusion').addEventListener('change', saveFit);
 $('reset').addEventListener('click', resetFit);
 $('calibrate').addEventListener('click', () => {
-  if (engine === 'hand') operation++;
-  tracker.reset(); wristTracker.reset(); wristDetector?.reset(); handTarget.reset(); poseInitialized = false;
-  notice(engine === 'wrist' ? '손등 쪽 손목과 팔을 함께 보여 주세요. 추적할 손목을 다시 찾습니다.' : '손등과 손가락을 카메라 쪽으로 펴고 1초 정도 유지해 주세요. 손의 기준 형태와 회전을 다시 맞춥니다.');
+  operation++;
+  tracker.reset(); handTarget.reset(); poseInitialized = false;
+  notice('손등과 손가락을 카메라 쪽으로 펴고 1초 정도 유지해 주세요. 손의 기준 형태와 회전을 다시 맞춥니다.');
 });
 $('save-diagnostics').addEventListener('click',()=>{
   if(!diagnosticRecords.length)return;
-  const blob=new Blob([JSON.stringify({version:'0.7.1',engine,recordedAt:new Date().toISOString(),frames:diagnosticRecords})],{type:'application/json'});
+  const blob=new Blob([JSON.stringify({version:'0.7.2',engine,recordedAt:new Date().toISOString(),frames:diagnosticRecords})],{type:'application/json'});
   const url=URL.createObjectURL(blob), link=document.createElement('a');link.href=url;link.download='wrist-diagnostics.json';link.click();setTimeout(()=>URL.revokeObjectURL(url),1000);
 });
 $('start').addEventListener('click', () => mode === 'idle' ? startCamera() : stopCamera());
@@ -369,15 +325,6 @@ $('sample').addEventListener('click', () => {
   if (!adjustment) return;
   modelOperation++; replaceModel(makeSampleWatch()); modelKey = 'sample'; applyFit(fitSettings.load(engine, modelKey));
   $('model-name').textContent = 'Studio 01'; $('model-caption').textContent = '준비된 모델이 없어도 바로 테스트할 수 있어요.'; $('model-status').textContent = ''; $('model-file').value = '';
-});
-$('tracking-engine').addEventListener('change', () => {
-  const restart = mode !== 'idle';
-  stopCamera();
-  engine = $('tracking-engine').value;
-  defaults = defaultFit(engine); applyFit(fitSettings.load(engine, modelKey));
-  $('fit-saved').textContent = '추적 방식별 착용 설정을 불러왔어요.';
-  $('calibrate').textContent = engine === 'wrist' ? '손목 다시 찾기' : '손등 기준 맞추기';
-  if (restart) void startCamera();
 });
 document.addEventListener('visibilitychange', () => { if (document.hidden && mode !== 'idle') stopCamera('다른 화면으로 이동해 카메라를 껐습니다. 다시 시작하려면 카메라 시작을 눌러 주세요.'); });
 window.addEventListener('pagehide', () => { stopCamera(); });

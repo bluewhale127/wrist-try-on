@@ -6,7 +6,7 @@
   <meta name="theme-color" content="#101619">
   <meta name="description" content="카메라로 손목을 비추고 나만의 3D 시계를 착용해 보세요.">
   <title>손목 위의 시계 · AR 착용 테스트</title>
-  <link rel="stylesheet" href="./style.css?v=7">
+  <link rel="stylesheet" href="./style.css?v=72">
   <script type="importmap">{"imports":{"three":"./vendor/three/three.module.js","three/addons/":"./vendor/three/addons/"}}</script>
 </head>
 <body>
@@ -23,13 +23,12 @@
           <div class="stage-bottom"><span id="tracking-label">임시 시계를 먼저 살펴보세요</span><span id="fps" aria-hidden="true"></span></div>
         </div>
         <div class="camera-actions"><button id="start" class="primary" type="button">카메라 시작</button><button id="switch" class="secondary" type="button" disabled>카메라 전환</button></div>
-        <div class="engine-picker"><label for="tracking-engine">추적 방식</label><select id="tracking-engine"><option value="hand">손 관절 추적 · 기존</option><option value="wrist">손목 직접 추적 · 실험</option></select><p class="small">손목 직접 추적은 손등 쪽 손목을 사용합니다. 옆면·손바닥에서는 끊길 수 있어요. 두 방식을 같은 동작으로 비교해 보세요.</p></div>
         <button id="calibrate" class="text-button" type="button" disabled>손등 기준 맞추기</button>
         <p id="status" class="status" role="status" aria-live="polite">밝은 곳에서 손등과 손가락, 손목이 함께 보이게 비춰 주세요.</p>
         <p id="error" class="error" role="alert" hidden></p>
         <details id="diagnostics"><summary>관절·회전 진단</summary>
           <label class="check-label"><input id="debug" type="checkbox">진단 표시·좌표 기록</label>
-          <p class="small">노랑: 관절 또는 손목 기준점 · 파랑/초록: 기존 모드의 원래/보정 방향. ‘손목 뒤 스트랩 가리기’를 꺼서 가림 영향도 비교할 수 있어요.</p>
+          <p class="small">노랑: 손 관절 · 파랑/초록: 원래/보정 방향. ‘손목 뒤 스트랩 가리기’를 꺼서 가림 영향도 비교할 수 있어요.</p>
           <p id="debug-info" class="small">카메라를 켜고 진단 표시를 선택하세요.</p>
           <button id="save-diagnostics" class="text-button" type="button" disabled>진단 기록 저장</button>
           <p class="small">최근 600회의 좌표와 처리 시간을 기기에 저장합니다. 영상은 포함하지 않으며 자동 전송하지 않습니다.</p>
@@ -53,8 +52,8 @@
         <p class="note">크기는 시각적으로 추정합니다. 실제 치수 측정용은 아니며, 손목을 크게 돌리면 정렬이 흐트러질 수 있습니다.</p>
       </aside>
     </div>
-    <footer>Wrist Studio 0.7.1 · Android Chrome 기준 · 영상은 기기 안에서 처리됩니다</footer>
+    <footer>Wrist Studio 0.7.2 · Android Chrome 기준 · 영상은 기기 안에서 처리됩니다</footer>
   </main>
-  <script type="module" src="./app.js?v=71"></script>
+  <script type="module" src="./app.js?v=72"></script>
 </body>
 </html>
