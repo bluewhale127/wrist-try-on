@@ -4,6 +4,7 @@ import { DRACOLoader } from 'three/addons/loaders/DRACOLoader.js';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import { estimateWristPose, landmarkPoint, WristPoseTracker, smoothingAlpha, watchRotationDegrees } from './pose.js?v=78';
 import { calibrationPrompt } from './initial-calibration.js?v=78';
+import { RearPalmAxis } from './rear-axis.js?v=79';
 import { HandDetector } from './hand-detector.js?v=75';
 import { RearWristAssist, rearObservation } from './rear-assist.js?v=75';
 import { HandTarget } from './hand-target.js?v=73';
@@ -25,7 +26,9 @@ let handLandmarker = null, detectorPromise = null;
 const tracker = new WristPoseTracker();
 const handTarget = new HandTarget();
 const rearAssist = new RearWristAssist();
+const rearAxis = new RearPalmAxis();
 const rearEnabled = () => !mirror && $('rear-assist').checked;
+const rearAxisEnabled = () => !mirror && $('rear-axis').checked;
 const debugCanvas = $('tracking-debug'), debugContext = debugCanvas.getContext('2d');
 let debugFrame = null, diagnosticRecords = [];
 const renderCenter = new THREE.Vector3();
@@ -56,7 +59,7 @@ function applyCaseOrientation(values) {
   adjustment.rotation.set(THREE.MathUtils.degToRad(values['tilt-x']), THREE.MathUtils.degToRad(values['tilt-y']), THREE.MathUtils.degToRad(rotation), 'ZYX');
 }
 function applyFit(values) {
-  rearAssist.reset();
+  rearAssist.reset(); rearAxis.reset();
   for (const id of controls) $(id).value = values[id];
   $('occlusion').checked = values.occlusion;
   updateFit();
@@ -80,8 +83,9 @@ function updateMode(next) {
   $('camera-label').textContent = next === 'idle' ? '카메라 꺼짐' : next === 'loading' ? '준비 중' : mirror ? '전면 카메라' : '후면 카메라';
   $('tracking-label').textContent = next === 'idle' ? '3D 미리보기 · 카메라 꺼짐' : next === 'loading' ? '손 추적을 준비하고 있어요' : '손등과 손가락, 손목을 보여 주세요';
   $('fps').textContent = '';
-  tracker.reset(); handTarget.reset(); rearAssist.reset(); poseInitialized = false;
+  tracker.reset(); rearAxis.reset(); handTarget.reset(); rearAssist.reset(); poseInitialized = false;
   $('rear-assist').disabled = next === 'loading' || (next === 'live' && mirror);
+  $('rear-axis').disabled = next === 'loading' || (next === 'live' && mirror);
   debugFrame = null; debugContext.clearRect(0, 0, width, height);
   if (next === 'idle') $('debug-info').textContent = '카메라가 꺼졌습니다. 남아 있는 진단 기록은 저장할 수 있어요.';
   if (next === 'loading') { diagnosticRecords = []; $('save-diagnostics').disabled = true; }
@@ -171,8 +175,11 @@ async function detect(time) {
     const next = estimateWristPose(landmarks, view, { mirror, offset: values.offset, scale: values.scale, worldLandmarks });
     const observation = assistEnabled ? rearObservation(next, landmarks, tracker, visual) : {allowed:true};
     const accepted = tracker.update(observation.allowed ? next : null, time);
+    const displayPose = accepted && tracker.orientationSign && rearAxisEnabled()
+      ? rearAxis.update(tracker.pose, next, tracker.template, time) : tracker.pose;
+    if (!accepted) rearAxis.interrupt();
     if(assistEnabled){
-      if(accepted && tracker.orientationSign && tracker.diagnostics.quality>=.65 && tracker.diagnostics.disagreement<.75)rearAssist.correct(tracker.pose,time);
+      if(accepted && tracker.orientationSign && tracker.diagnostics.quality>=.65 && tracker.diagnostics.disagreement<.75)rearAssist.correct(displayPose,time);
       else if(accepted){rearAssist.reset();rearAssist.diagnostics={state:'hand',reason:'uncertain-anchor'};}
       else rearAssist.fallback(time,observation.allowed ? tracker.diagnostics.state : observation.reason);
     }
@@ -191,10 +198,12 @@ async function detect(time) {
       const d = tracker.diagnostics;
       $('debug-info').textContent = `상태: ${{calibrating:'기준 설정',tracking:'추적',corrected:'기울기 보정',uncertain:'불확실',missing:'손 없음',reorient:'손 표면으로 방향 복구',reacquiring:'회전 재확인',outlier:'순간 튐 확인','depth-check':'전면 회전 방향 재확인'}[d.state]} · 배치 일치도 ${Math.round(d.quality*100)}%\n표면 추정: ${{back:'손등',palm:'손바닥',edge:'옆면·기울임'}[d.surface]||'확인 중'} · 기준 ${d.surfaceConfirmed?'확인됨':'확인 중'}\n시계 방향 ${values.rotation}° · 엄지 축 ${tracker.watchOrientationSign}\n대상: ${handTarget.state} · 검출 ${result.landmarks?.length || 0}개\n프레임 처리 ${Math.round(completed-time)}ms · ${handLandmarker.backend}\n일치도는 실제 정확도 점수가 아닙니다.`;
       if(mirror)$('debug-info').textContent+=`\n전면 깊이 확인 ${d.depthEvidenceFrames||0}회 · ${d.depthRealigned?'방향 복구':d.depthPending?'방향 확인 중':'추적 중'}`;
+      if(rearAxisEnabled() && rearAxis.diagnostics)$('debug-info').textContent+=`\n팔 기울기 보정 ${Math.round(rearAxis.diagnostics.correction*180/Math.PI)}° · ${rearAxis.diagnostics.trusted?'관절 확인됨':'확인 중'}`;
       if(!tracker.orientationSign)$('debug-info').textContent+=`\n초기 기준: ${calibrationPrompt(d)}`;
       if(assistEnabled)$('debug-info').textContent+=`\n후면 보조: ${rearAssist.diagnostics.state} · ${rearAssist.diagnostics.reason} · ${Math.round(assistMs)}ms`;
       diagnosticRecords.push({ time, elapsed: completed-time, inferenceMs: elapsed, backend: handLandmarker.backend,
         rearAssist:assistEnabled?{...rearAssist.diagnostics,observation,processingMs:assistMs}:null,
+        rearAxis:rearAxisEnabled()?rearAxis.diagnostics:null, displayRotation:displayPose?.rotation.toArray(),
         view:{width,height,videoWidth:video.videoWidth,videoHeight:video.videoHeight}, mirror, fit:values,
         landmarks,worldLandmarks,handedness:selected === null ? null : result.handedness?.[selected],
         target:{state:handTarget.state,index:selected,detected:result.landmarks?.length || 0},
@@ -224,7 +233,9 @@ function render(time) {
     anchor.rotation.set(0.2, reduceMotion ? -0.25 : Math.sin(time * 0.0003) * 0.25 - 0.15, -0.08);
     occluder.visible = false;
   } else {
-    const targetPose = (rearEnabled() ? rearAssist.sample(time) : null) || tracker.sample(time);
+    const trackedPose = tracker.sample(time);
+    const targetPose = (rearEnabled() ? rearAssist.sample(time) : null) ||
+      (trackedPose && rearAxisEnabled() ? rearAxis.sample(time) || trackedPose : trackedPose);
     anchor.visible = mode === 'live' && !!targetPose && !!tracker.orientationSign;
     stage.classList.toggle('tracked', anchor.visible);
     if (anchor.visible) {
@@ -258,7 +269,8 @@ function drawDiagnostics(time) {
   if(debugFrame.next && tracker.pose){
     const origin=tracker.pose.position, length=tracker.pose.size;
     const raw=debugFrame.next.rotation.clone();if(tracker.orientationSign===-1)raw.multiply(new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0,1,0),Math.PI));
-    for(const [rotation,color] of [[raw,'#66b7ff'],[tracker.pose.rotation,'#a2efdb']]) {
+    const shown = (rearEnabled() && rearAssist.sample(time)) || (rearAxisEnabled() && rearAxis.sample(time)) || tracker.pose;
+    for(const [rotation,color] of [[raw,'#66b7ff'],[shown.rotation,'#a2efdb']]) {
       const tip=new THREE.Vector3(0,0,length).applyQuaternion(rotation).add(origin);
       line(point(origin),point(tip),color);
       debugContext.fillStyle=color;debugContext.beginPath();debugContext.arc(...point(tip),5,0,Math.PI*2);debugContext.fill();
@@ -325,7 +337,7 @@ try {
     renderer.setSize(width, height, false);
     debugCanvas.width = Math.round(width); debugCanvas.height = Math.round(height);
     camera.left = -width / 2; camera.right = width / 2; camera.top = height / 2; camera.bottom = -height / 2; camera.updateProjectionMatrix();
-    tracker.reset(); rearAssist.reset(); poseInitialized = false;
+    tracker.reset(); rearAxis.reset(); rearAssist.reset(); poseInitialized = false;
   }).observe(stage);
   animationId = requestAnimationFrame(render);
 } catch (error) {
@@ -333,27 +345,28 @@ try {
   $('start').disabled = true; console.error(error);
 }
 applyFit(fitSettings.load(engine, modelKey));
-for (const id of controls) $(id).addEventListener('input', () => { rearAssist.reset(); updateFit(); saveFit(); });
+for (const id of controls) $(id).addEventListener('input', () => { rearAssist.reset(); rearAxis.reset(); updateFit(); saveFit(); });
 $('rear-assist').addEventListener('change',()=>{
-  operation++;rearAssist.reset();tracker.reset();handTarget.reset();poseInitialized=false;
+  operation++;rearAssist.reset();tracker.reset(); rearAxis.reset();handTarget.reset();poseInitialized=false;
   notice('후면 추적 설정을 바꿨어요. 손등과 손가락을 보여 기준을 다시 맞춰 주세요.');
 });
 $('occlusion').addEventListener('change', saveFit);
+$('rear-axis').addEventListener('change',()=>{rearAxis.reset();rearAssist.reset();});
 $('reset').addEventListener('click', resetFit);
 $('align-dial').addEventListener('click', () => {
   $('rotation').value = 90; $('tilt-x').value = 0; $('tilt-y').value = 0;
   updateFit(); saveFit();
-  if (mode === 'live') { operation++; tracker.reset(); handTarget.reset(); rearAssist.reset(); poseInitialized = false; }
+  if (mode === 'live') { operation++; tracker.reset(); rearAxis.reset(); handTarget.reset(); rearAssist.reset(); poseInitialized = false; }
   notice('6시는 엄지, 12시는 새끼손가락 쪽으로 맞춥니다. 카메라에 손등과 손가락을 펴고 약 2초 동안 움직이지 않고 유지해 주세요.');
 });
 $('calibrate').addEventListener('click', () => {
   operation++;
-  tracker.reset(); handTarget.reset(); rearAssist.reset(); poseInitialized = false;
+  tracker.reset(); rearAxis.reset(); handTarget.reset(); rearAssist.reset(); poseInitialized = false;
   notice('손등과 손가락을 카메라 쪽으로 펴고 약 2초 동안 움직이지 않고 유지해 주세요. 손의 기준 형태와 회전을 다시 맞춥니다.');
 });
 $('save-diagnostics').addEventListener('click',()=>{
   if(!diagnosticRecords.length)return;
-  const blob=new Blob([JSON.stringify({version:'0.7.8',engine,recordedAt:new Date().toISOString(),frames:diagnosticRecords})],{type:'application/json'});
+  const blob=new Blob([JSON.stringify({version:'0.7.9',engine,recordedAt:new Date().toISOString(),frames:diagnosticRecords})],{type:'application/json'});
   const url=URL.createObjectURL(blob), link=document.createElement('a');link.href=url;link.download='wrist-diagnostics.json';link.click();setTimeout(()=>URL.revokeObjectURL(url),1000);
 });
 $('start').addEventListener('click', () => mode === 'idle' ? startCamera() : stopCamera());

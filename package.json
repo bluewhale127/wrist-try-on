@@ -1,7 +1,7 @@
 {
   "name": "wrist-try-on",
   "private": true,
-  "version": "0.7.8",
+  "version": "0.7.9",
   "type": "module",
   "description": "Android browser wrist watch try-on prototype",
   "scripts": {
@@ -9,7 +9,7 @@
     "prestart": "npm run assets",
     "start": "node serve.mjs",
     "pretest": "npm run assets",
-    "test": "node --test core.test.mjs fit-settings.test.mjs rear-assist.test.mjs",
+    "test": "node --test core.test.mjs fit-settings.test.mjs rear-assist.test.mjs rear-axis.test.mjs",
     "build": "node build.mjs"
   },
   "dependencies": {
