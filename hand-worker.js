@@ -1,5 +1,6 @@
 // Classic worker: the WASM loader uses importScripts, which module workers disallow.
-let detector;
+let detector, captureGray;
+const grayHolder={};
 self.onmessage = async ({ data }) => {
   try {
     if (data.type === 'init') {
@@ -20,8 +21,13 @@ self.onmessage = async ({ data }) => {
       self.postMessage({ id: data.id, backend: `worker-${delegate}` });
     } else if (data.type === 'frame') {
       const started = performance.now();
+      let gray=null;
+      if(data.captureGray){
+        captureGray ||= (await import('./wrist-flow.js?v=75')).grayFrame;
+        try { gray=captureGray(data.frame,grayHolder); } catch { /* Hand tracking can continue without the optional bridge. */ }
+      }
       const result = detector.detectForVideo(data.frame, data.time);
-      self.postMessage({ id: data.id, result, elapsed: performance.now() - started });
+      self.postMessage({ id: data.id, result, gray, elapsed: performance.now() - started },gray?[gray.data.buffer]:[]);
     }
   } catch (error) { self.postMessage({ id: data.id, error: error.message || String(error) }); }
   finally { data.frame?.close(); }

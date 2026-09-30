@@ -3,7 +3,7 @@ export class HandDetector {
   async initialize() {
     if (typeof Worker !== 'undefined' && typeof OffscreenCanvas !== 'undefined' && typeof createImageBitmap === 'function') {
       try {
-        this.worker = new Worker(new URL('./hand-worker.js?v=5', import.meta.url));
+        this.worker = new Worker(new URL('./hand-worker.js?v=75', import.meta.url));
         this.worker.onmessage = ({ data }) => {
           const pending = this.pending.get(data.id);
           if (!pending) return;
@@ -44,21 +44,27 @@ export class HandDetector {
     try { this.main = await HandLandmarker.createFromOptions(files, options); this.backend = 'main-GPU'; }
     catch { options.baseOptions.delegate = 'CPU'; this.main = await HandLandmarker.createFromOptions(files, options); this.backend = 'main-CPU'; }
   }
-  async detect(video, time) {
+  async detect(video, time, {captureGray=false}={}) {
     if (this.worker) {
       let frame;
       try {
         const w = video.videoWidth || video.width, h = video.videoHeight || video.height;
         const scale = Math.min(1, 640 / Math.max(w, h));
         frame = await createImageBitmap(video, { resizeWidth: Math.max(1, Math.round(w * scale)), resizeHeight: Math.max(1, Math.round(h * scale)), resizeQuality: 'low' });
-        return await this.request({ type: 'frame', frame, time }, [frame]);
+        return await this.request({ type: 'frame', frame, time, captureGray }, [frame]);
       } catch {
         frame?.close(); this.stopWorker(); await this.initializeMain();
       }
     }
     const started = performance.now();
+    let gray=null;
+    if(captureGray){
+      this.grayCapture ||= (await import('./wrist-flow.js?v=75')).grayFrame;
+      this.grayHolder ||= {};
+      try { gray=this.grayCapture(video,this.grayHolder); } catch { /* Optional camera pixels are unavailable. */ }
+    }
     const result = this.main.detectForVideo(video, time);
-    return { result, elapsed: performance.now() - started };
+    return { result, gray, elapsed: performance.now() - started };
   }
   close() { this.stopWorker(); this.main?.close(); this.main = null; }
 }
