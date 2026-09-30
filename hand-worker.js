@@ -8,7 +8,7 @@ self.onmessage = async ({ data }) => {
       const options = {
         canvas: new OffscreenCanvas(1, 1),
         baseOptions: { modelAssetPath: new URL('./vendor/vision/hand_landmarker.task', self.location.href).href, delegate: 'GPU' },
-        runningMode: 'VIDEO', numHands: 1,
+        runningMode: 'VIDEO', numHands: 2,
         minHandDetectionConfidence: 0.5, minHandPresenceConfidence: 0.5, minTrackingConfidence: 0.5,
       };
       let delegate = 'GPU';

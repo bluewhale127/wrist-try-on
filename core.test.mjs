@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { estimateWristPose, coverTransform, landmarkPoint, smoothingAlpha, WristPoseTracker, wristSurfacePosition } from './pose.js';
 import { Quaternion, Vector3 } from './vendor/three/three.module.js';
 import { palmTemplate, fitPalmProjection } from './palm-projection.js';
+import { HandTarget } from './hand-target.js';
 import { inspectGLB } from './watch.js';
 
 const view = { videoWidth: 1280, videoHeight: 720, width: 400, height: 600 };
@@ -116,6 +117,9 @@ test('side-view rotation keeps moving and does not reset its sign after a detect
   assert.ok(new Vector3(0,0,1).applyQuaternion(tracker.pose.rotation).z< -0.65);
   tracker.update(null,4800);assert.equal(tracker.sample(4900),null);
   tracker.update(rotationPose(150*Math.PI/180),5000);
+  assert.equal(tracker.sample(5000),null);
+  tracker.update(rotationPose(150*Math.PI/180),5033);
+  tracker.update(rotationPose(150*Math.PI/180),5066);
   assert.ok(new Vector3(0,0,1).applyQuaternion(tracker.pose.rotation).z< -0.8);
 });
 test('an isolated 180-degree landmark glitch does not turn the watch over', () => {
@@ -203,6 +207,97 @@ test('out-of-order results are discarded and capture age determines expiry',()=>
   assert.equal(tracker.update(rotationPose(-0.5),20),false);
   assert.ok(tracker.pose.rotation.angleTo(rotation)<1e-6);
   assert.equal(tracker.sample(254),null);
+});
+
+test('short loss retains the depth branch despite reversed world depth on return',()=>{
+  for(const right of [false,true])for(const mirror of [false,true])for(const sign of [-1,1]){
+    const options={right,mirror}, tracker=calibratedTracker(options);
+    for(let i=1;i<=20;i++)tracker.update(rotationPose(sign*i*0.04,options),i*33);
+    tracker.update(null,800);assert.equal(tracker.sample(1000),null);
+    const hand=rotatedHand(sign*0.95,right), wrong=rotatedHand(-sign*0.95,right);
+    const returned=estimateWristPose(hand.landmarks,rotationView,{worldLandmarks:wrong.world,mirror});
+    tracker.update(returned,1100);assert.equal(tracker.sample(1100),null);
+    tracker.update(returned,1133);assert.equal(tracker.sample(1133),null);
+    tracker.update(returned,1166);
+    const expected=new Quaternion().setFromAxisAngle(new Vector3(0,1,0),(mirror?-1:1)*sign*0.95);
+    assert.ok(tracker.sample(1166));assert.ok(tracker.pose.rotation.angleTo(expected)<0.02);
+  }
+});
+test('long loss needs a stable back-of-hand view instead of guessing an unseen turn',()=>{
+  const tracker=calibratedTracker();
+  for(let i=1;i<=30;i++)tracker.update(rotationPose(i*0.03),i*33);
+  for(let t=3000;t<=3300;t+=50)tracker.update(rotationPose(2.5),t);
+  assert.equal(tracker.sample(3300),null);assert.equal(tracker.diagnostics.state,'reorient');
+  for(let t=3400;t<=3650;t+=50)tracker.update(rotationPose(0),t);
+  assert.ok(tracker.sample(3650));assert.ok(tracker.pose.rotation.angleTo(rotationPose(0).rotation)<0.01);
+});
+test('motion memory permits real reversals at the palm-facing turning point',()=>{
+  for(const direction of [-1,1]){
+    const tracker=calibratedTracker();let time=0;
+    const sequence=[...Array.from({length:60},(_,i)=>(i+1)*3),...Array.from({length:60},(_,i)=>177-i*3)];
+    for(const degrees of sequence){
+      time+=33;tracker.update(rotationPose(direction*degrees*Math.PI/180),time);
+      assert.ok(tracker.pose.rotation.angleTo(rotationPose(direction*degrees*Math.PI/180).rotation)<0.6,`reversal at ${degrees}, time ${time}`);
+    }
+    assert.ok(tracker.pose.rotation.angleTo(rotationPose(0).rotation)<0.16);
+    assert.ok(tracker.sample(time));
+  }
+});
+test('long-loss recovery accepts the original tilted calibration view',()=>{
+  const tracker=new WristPoseTracker();
+  for(let t=-600;t<=0;t+=50)tracker.update(rotationPose(0.5),t);
+  assert.ok(tracker.orientationSign);
+  for(let t=2000;t<=2300;t+=50)tracker.update(rotationPose(0.5),t);
+  assert.ok(tracker.sample(2300));
+  assert.ok(tracker.pose.rotation.angleTo(rotationPose(0.5).rotation)<0.05);
+});
+
+function detectedHands(...hands) {
+  return {landmarks:hands.map(h=>h.points),handedness:hands.map(h=>[{categoryName:h.side||'Left',score:0.98}])};
+}
+function targetHand(x=0.5,y=0.5,scale=1,side='Left') {
+  return {points:rotatedHand(0).landmarks.map(p=>({...p,x:x+(p.x-0.5)*scale,y:y+(p.y-0.5)*scale})),side};
+}
+function lockedTarget(hand=targetHand()) {
+  const target=new HandTarget();for(let t=0;t<=150;t+=50)target.select(detectedHands(hand),rotationView,t);
+  assert.equal(target.state,'locked');return target;
+}
+test('hand identity follows spatial continuity when detector ordering changes',()=>{
+  const main=targetHand(), background=targetHand(0.15,0.8,0.3), target=lockedTarget(main);
+  assert.equal(target.select(detectedHands(background,main),rotationView,183),1);
+  assert.equal(target.select(detectedHands(main,background),rotationView,216),0);
+});
+test('loss cannot attach the watch to a smaller background hand, even after seconds',()=>{
+  const target=lockedTarget(), background=targetHand(0.25,0.75,0.27);
+  for(const time of [183,216,500,1500,4000])assert.equal(target.select(detectedHands(background),rotationView,time),null);
+  assert.equal(target.state,'lost');
+  assert.equal(target.select(detectedHands(targetHand(0.52,0.51)),rotationView,4100),0);
+});
+test('nearby opposite hand after loss needs explicit target reset',()=>{
+  const target=lockedTarget(), opposite=targetHand(0.51,0.5,1,'Right');
+  target.select(detectedHands(),rotationView,300);
+  assert.equal(target.select(detectedHands(opposite),rotationView,500),null);
+  target.reset();for(let t=600;t<=750;t+=50)target.select(detectedHands(opposite),rotationView,t);
+  assert.equal(target.state,'locked');assert.equal(target.target.side,'Right');
+});
+test('target association allows gradual motion, size change, side views and noisy handedness',()=>{
+  const target=lockedTarget();
+  for(let i=1;i<=20;i++){
+    const hand=targetHand(0.5+i*0.003,0.5,1+i*0.01,i===10?'Right':'Left');
+    assert.equal(target.select(detectedHands(hand),rotationView,150+i*33),0);
+  }
+  for(let i=1;i<=30;i++){
+    const points=rotatedHand(i*Math.PI/60).landmarks.map(p=>({...p,x:0.56+(p.x-0.5)*1.2,y:0.5+(p.y-0.5)*1.2}));
+    assert.equal(target.select(detectedHands({points}),rotationView,810+i*33),0);
+  }
+});
+test('ambiguous overlapping hands and invalid or stale observations do not update the target',()=>{
+  const target=lockedTarget(), previous=target.target;
+  assert.equal(target.select(detectedHands(targetHand(0.49),targetHand(0.51)),rotationView,183),null);
+  assert.equal(target.target,previous);
+  assert.equal(target.select(detectedHands(targetHand()),rotationView,180),null);
+  const bad=targetHand();bad.points[5].x=NaN;
+  assert.equal(target.select(detectedHands(bad),rotationView,216),null);
 });
 test('case revolves around a fixed wrist centre with radius independent of watch size', () => {
   const center=new Vector3(23,45,0), radius=30;

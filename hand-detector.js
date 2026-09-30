@@ -3,7 +3,7 @@ export class HandDetector {
   async initialize() {
     if (typeof Worker !== 'undefined' && typeof OffscreenCanvas !== 'undefined' && typeof createImageBitmap === 'function') {
       try {
-        this.worker = new Worker(new URL('./hand-worker.js?v=2', import.meta.url));
+        this.worker = new Worker(new URL('./hand-worker.js?v=5', import.meta.url));
         this.worker.onmessage = ({ data }) => {
           const pending = this.pending.get(data.id);
           if (!pending) return;
@@ -38,7 +38,7 @@ export class HandDetector {
     const files = await FilesetResolver.forVisionTasks(new URL('./vendor/vision/wasm/', import.meta.url).href);
     const options = {
       baseOptions: { modelAssetPath: new URL('./vendor/vision/hand_landmarker.task', import.meta.url).href, delegate: 'GPU' },
-      runningMode: 'VIDEO', numHands: 1,
+      runningMode: 'VIDEO', numHands: 2,
       minHandDetectionConfidence: 0.5, minHandPresenceConfidence: 0.5, minTrackingConfidence: 0.5,
     };
     try { this.main = await HandLandmarker.createFromOptions(files, options); this.backend = 'main-GPU'; }
