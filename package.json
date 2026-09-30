@@ -1,0 +1,20 @@
+{
+  "name": "wrist-try-on",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Android browser wrist watch try-on prototype",
+  "scripts": {
+    "assets": "node prepare-assets.mjs",
+    "prestart": "npm run assets",
+    "start": "node serve.mjs",
+    "pretest": "npm run assets",
+    "test": "node --test core.test.mjs",
+    "build": "node build.mjs"
+  },
+  "dependencies": {
+    "@mediapipe/tasks-vision": "0.10.32",
+    "three": "0.180.0"
+  },
+  "engines": { "node": ">=20" }
+}
