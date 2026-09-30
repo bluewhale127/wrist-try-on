@@ -677,10 +677,10 @@ test('startup cannot accumulate dwell through missing or invalid frames',()=>{
 });
 test('startup rejects tilted, depth-inconsistent, cropped and curled inputs without timing out to a guess',()=>{
   for(const kind of ['tilted','depth','cropped','curled'])for(const mirror of [false,true]){
-    const tracker=new WristPoseTracker(),hand=rotatedHand(kind==='tilted'?.5:0);
+    const tracker=new WristPoseTracker(),hand=rotatedHand(kind==='tilted'?.8:0);
     if(kind==='cropped')hand.landmarks[12].x=1.01;
     if(kind==='curled')hand.landmarks[8]={...hand.landmarks[5]};
-    const world=kind==='depth'?rotatedHand(.5).world:hand.world;
+    const world=kind==='depth'?rotatedHand(.7).world:hand.world;
     for(let t=0;t<=10000;t+=100)tracker.update(estimateWristPose(hand.landmarks,rotationView,{worldLandmarks:world,mirror}),t);
     assert.equal(tracker.orientationSign,0,kind);assert.equal(tracker.template,null);
     assert.equal(tracker.diagnostics.progress,0);
@@ -697,7 +697,7 @@ test('slow continuous movement cannot drag the startup reference along with it',
     const tracker=new WristPoseTracker();
     for(let t=0;t<=1200;t+=100){
       const hand=rotatedHand(kind==='rotation'?t*.00025:0);
-      if(kind==='translation')for(const p of hand.landmarks)p.x+=t*.000025;
+      if(kind==='translation')for(const p of hand.landmarks)p.x+=t*.00005;
       if(kind==='scale')for(const p of hand.landmarks){p.x=.5+(p.x-.5)*(1+t*.00008);p.y=.5+(p.y-.5)*(1+t*.00008);}
       if(kind==='shape')hand.landmarks[9].x+=t*.00002;
       tracker.update(estimateWristPose(hand.landmarks,rotationView,{worldLandmarks:hand.world}),t);
@@ -718,4 +718,35 @@ test('startup-only finger gates do not reset a learned palm when fingers curl or
   for(let t=50;t<=500;t+=50)tracker.update(estimateWristPose(hand.landmarks,rotationView,{worldLandmarks:hand.world}),t);
   assert.equal(tracker.template,template);assert.ok(tracker.sample(500));
   tracker.reset();tracker.update(estimateWristPose(hand.landmarks,rotationView,{worldLandmarks:hand.world}),550);assert.equal(tracker.orientationSign,0);
+});
+
+
+test('stable hand with moderate world/landmark depth bias can initialize on either camera',()=>{
+  for(const right of [false,true])for(const mirror of [false,true])for(const direction of [-1,1]){
+    const tracker=new WristPoseTracker(),observed=rotatedHand(0,right);
+    for(let t=0;t<=1800;t+=100){
+      const world=rotatedHand(direction*(.38+(t%300===0?.035:-.02)),right);
+      const pose=estimateWristPose(observed.landmarks,rotationView,{worldLandmarks:world.world,mirror});
+      // The old 16-degree agreement gate rejected this stationary hand forever.
+      assert.ok(pose.rotation.angleTo(pose.depthRotation)>.28);
+      tracker.update(pose,t);
+      if(t<1500)assert.equal(tracker.orientationSign,0);
+    }
+    assert.ok(tracker.orientationSign);assert.ok(tracker.sample(1800));
+    const six=new Vector3(0,-1,0).applyAxisAngle(new Vector3(0,0,1),watchRotationDegrees(90,tracker.watchOrientationSign)*Math.PI/180).applyQuaternion(tracker.pose.rotation).setZ(0).normalize();
+    const raw=rotationPose(0,{right,mirror});const radial=raw.imagePalm[1].clone().sub(raw.imagePalm[4]).setZ(0).normalize();
+    assert.ok(six.dot(radial)>.99);
+  }
+});
+test('small handheld position drift within the fixed window no longer prevents startup',()=>{
+  const tracker=new WristPoseTracker();
+  for(let t=0;t<=1600;t+=100){const hand=rotatedHand(0);for(const p of hand.landmarks)p.x+=Math.min(t,1500)/1500*.03;tracker.update(estimateWristPose(hand.landmarks,rotationView,{worldLandmarks:hand.world}),t);}
+  assert.ok(tracker.orientationSign);assert.ok(tracker.sample(1600));
+});
+test('inverted startup axes are rejected even with the broader depth agreement tolerance',()=>{
+  for(const mirror of [false,true]){
+    const tracker=new WristPoseTracker(),observed=rotatedHand(0),wrong=rotatedHand(Math.PI);
+    for(let t=0;t<=5000;t+=100)tracker.update(estimateWristPose(observed.landmarks,rotationView,{worldLandmarks:wrong.world,mirror}),t);
+    assert.equal(tracker.orientationSign,0);assert.equal(tracker.template,null);assert.equal(tracker.diagnostics.reason,'depth');
+  }
 });

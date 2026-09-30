@@ -1,7 +1,7 @@
 import { Matrix4, Quaternion, Vector3 } from './vendor/three/three.module.js';
 import { fitPalmProjection } from './palm-projection.js?v=5';
 
-import { InitialCalibration } from './initial-calibration.js?v=77';
+import { InitialCalibration } from './initial-calibration.js?v=78';
 
 // The video and 3D overlay both use CSS object-fit: cover. All units here are CSS pixels.
 export function coverTransform(videoWidth, videoHeight, width, height) {

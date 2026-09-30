@@ -26,8 +26,11 @@ export class InitialCalibration {
     if (!pose) return fail('missing');
     if (!pose.calibration?.inFrame) return fail('frame');
     if (!pose.calibration.open || pose.rotationQuality < .9) return fail('open');
-    if (!pose.depthRotation || pose.rotation.angleTo(pose.depthRotation) > .28) return fail('depth');
-    if (Math.abs(normal(pose.rotation)) < .93 || Math.abs(normal(pose.depthRotation)) < .93) return fail('frontal');
+    // The two depth outputs have different systematic biases on real hands.
+    // A modest mismatch is not a failed detection. Keep a broad sanity gate
+    // for conflicting orientation, plus a separate frontal/stability check.
+    if (!pose.depthRotation || pose.rotation.angleTo(pose.depthRotation) > .6) return fail('depth');
+    if (Math.abs(normal(pose.rotation)) < .82 || Math.abs(normal(pose.depthRotation)) < .82) return fail('frontal');
     const template = palmTemplate(pose.imagePalm, pose.rotation);
     if (!template) return fail('shape');
     const center = pose.imagePalm.reduce((sum,p)=>sum.add(p),new Vector3()).multiplyScalar(.2);
@@ -38,8 +41,10 @@ export class InitialCalibration {
       // Compare to the start of the window, never a moving reference that can
       // silently follow slow drift. A rejected frame cannot count as dwell.
       if (time-this.lastTime > 250) reason = 'gap';
-      else if (pose.rotation.angleTo(a.rotation) > .14 || pose.depthRotation.angleTo(a.depth) > .14 ||
-        center.distanceTo(a.center)/a.length > .1 || Math.abs(Math.log(length/a.length)) > .06) reason = 'motion';
+      // Allow ordinary hand tremor and estimator jitter around the fixed
+      // anchor; the baseline still cannot drift with continuous movement.
+      else if (pose.rotation.angleTo(a.rotation) > .22 || pose.depthRotation.angleTo(a.depth) > .22 ||
+        center.distanceTo(a.center)/a.length > .18 || Math.abs(Math.log(length/a.length)) > .06) reason = 'motion';
       else if (Math.sqrt(template.reduce((sum,p,i)=>sum+p.distanceToSquared(a.template[i]),0)/5) > .035) reason = 'shape';
       if (reason) this.reset();
     }
