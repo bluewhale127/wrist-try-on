@@ -6,7 +6,7 @@
   <meta name="theme-color" content="#101619">
   <meta name="description" content="카메라로 손목을 비추고 나만의 3D 시계를 착용해 보세요.">
   <title>손목 위의 시계 · AR 착용 테스트</title>
-  <link rel="stylesheet" href="./style.css">
+  <link rel="stylesheet" href="./style.css?v=4">
   <script type="importmap">{"imports":{"three":"./vendor/three/three.module.js","three/addons/":"./vendor/three/addons/"}}</script>
 </head>
 <body>
@@ -17,6 +17,7 @@
         <div id="stage" class="stage">
           <video id="camera" autoplay muted playsinline aria-label="카메라 영상"></video>
           <canvas id="scene" aria-label="3D 시계"></canvas>
+          <canvas id="tracking-debug" aria-hidden="true" hidden></canvas>
           <div class="stage-top"><span id="mode-label">3D 미리보기</span><span id="camera-label">카메라 꺼짐</span></div>
           <div id="guide" class="guide" aria-hidden="true"><i></i><i></i><i></i><i></i></div>
           <div class="stage-bottom"><span id="tracking-label">임시 시계를 먼저 살펴보세요</span><span id="fps" aria-hidden="true"></span></div>
@@ -25,6 +26,13 @@
         <button id="calibrate" class="text-button" type="button" disabled>손등 기준 맞추기</button>
         <p id="status" class="status" role="status" aria-live="polite">밝은 곳에서 손등과 손가락, 손목이 함께 보이게 비춰 주세요.</p>
         <p id="error" class="error" role="alert" hidden></p>
+        <details id="diagnostics"><summary>관절·회전 진단</summary>
+          <label class="check-label"><input id="debug" type="checkbox">진단 표시·좌표 기록</label>
+          <p class="small">노랑: 손 관절 · 파랑: 기존 3D 방향 · 초록: 보정한 방향. ‘손목 뒤 스트랩 가리기’를 꺼서 가림 영향도 비교할 수 있어요.</p>
+          <p id="debug-info" class="small">카메라를 켜고 진단 표시를 선택하세요.</p>
+          <button id="save-diagnostics" class="text-button" type="button" disabled>진단 기록 저장</button>
+          <p class="small">최근 600회의 좌표와 처리 시간을 기기에 저장합니다. 영상은 포함하지 않으며 자동 전송하지 않습니다.</p>
+        </details>
       </section>
       <aside class="controls" aria-label="시계 설정">
         <section class="model-section"><div class="section-heading"><span class="eyebrow">01 / WATCH</span><button id="sample" class="text-button" type="button">임시 시계로</button></div><h2 id="model-name">Studio 01</h2><p id="model-caption">준비된 모델이 없어도 바로 테스트할 수 있어요.</p><label class="file-button" for="model-file">내 시계 불러오기 <span>GLB</span></label><input id="model-file" class="visually-hidden" type="file" accept=".glb,model/gltf-binary"><p class="small">선택한 모델은 이 기기에서만 열립니다.</p><p id="model-status" role="status" aria-live="polite"></p></section>
@@ -38,8 +46,8 @@
         <p class="note">크기는 시각적으로 추정합니다. 실제 치수 측정용은 아니며, 손목을 크게 돌리면 정렬이 흐트러질 수 있습니다.</p>
       </aside>
     </div>
-    <footer>Wrist Studio 0.3 · Android Chrome 기준 · 영상은 기기 안에서 처리됩니다</footer>
+    <footer>Wrist Studio 0.4 · Android Chrome 기준 · 영상은 기기 안에서 처리됩니다</footer>
   </main>
-  <script type="module" src="./app.js?v=3"></script>
+  <script type="module" src="./app.js?v=4"></script>
 </body>
 </html>

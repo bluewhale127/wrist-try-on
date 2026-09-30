@@ -2,6 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { estimateWristPose, coverTransform, landmarkPoint, smoothingAlpha, WristPoseTracker, wristSurfacePosition } from './pose.js';
 import { Quaternion, Vector3 } from './vendor/three/three.module.js';
+import { palmTemplate, fitPalmProjection } from './palm-projection.js';
 import { inspectGLB } from './watch.js';
 
 const view = { videoWidth: 1280, videoHeight: 720, width: 400, height: 600 };
@@ -119,20 +120,89 @@ test('side-view rotation keeps moving and does not reset its sign after a detect
 });
 test('an isolated 180-degree landmark glitch does not turn the watch over', () => {
   const tracker=new WristPoseTracker();
-  for(const t of [-66,-33,0])tracker.update(rotationPose(0),t);
+  for(let t=-600;t<=0;t+=50)tracker.update(rotationPose(0),t);
   assert.ok(tracker.orientationSign);
   tracker.update(rotationPose(Math.PI),33);
   assert.ok(tracker.pose.rotation.angleTo(rotationPose(0).rotation)<1e-6);
   tracker.update(rotationPose(0),66);
   assert.ok(tracker.pose.rotation.angleTo(rotationPose(0).rotation)<1e-6);
 });
-test('calibration waits for consistent front-facing observations and reset clears it', () => {
+test('calibration needs elapsed stable time, a frontal view, and restarts after a gap', () => {
   const tracker=new WristPoseTracker();
   for(let i=0;i<4;i++)tracker.update(rotationPose(Math.PI/2),i*33);
   assert.equal(tracker.orientationSign,0);
   for(let i=4;i<7;i++)tracker.update(rotationPose(0),i*33);
+  assert.equal(tracker.orientationSign,0);
+  tracker.update(rotationPose(0),900);
+  assert.equal(tracker.orientationSign,0);
+  for(let t=950;t<=1500;t+=50)tracker.update(rotationPose(0),t);
   assert.equal(tracker.orientationSign,1);
-  tracker.reset();assert.equal(tracker.orientationSign,0);
+  tracker.reset();assert.equal(tracker.orientationSign,0);assert.equal(tracker.template,null);
+});
+
+function calibratedTracker(options={}) {
+  const tracker=new WristPoseTracker();
+  for(let t=-600;t<=0;t+=50)tracker.update(rotationPose(0,options),t);
+  assert.ok(tracker.orientationSign);return tracker;
+}
+test('projected palm fitting recovers rotations about multiple axes',()=>{
+  const hand=rotatedHand(0), base=estimateWristPose(hand.landmarks,rotationView,{worldLandmarks:hand.world});
+  const template=palmTemplate(base.imagePalm,base.rotation);
+  for(const axis of [new Vector3(1,0,0),new Vector3(0,1,0),new Vector3(1,2,3).normalize()])for(const angle of [-2.5,-1.5,-0.5,0.5,1.5,2.5]){
+    const q=new Quaternion().setFromAxisAngle(axis,angle);
+    const projected=template.map(p=>p.clone().applyQuaternion(q).multiplyScalar(220).add(new Vector3(32,-40,0)).setZ(0));
+    const fitted=fitPalmProjection(template,projected);
+    assert.ok(fitted.residual<1e-10);
+    assert.ok(Math.min(...fitted.rotations.map(r=>r.angleTo(q)))<1e-6);
+  }
+});
+test('wrong world-depth orientation cannot override a clear image palm plane',()=>{
+  const tracker=calibratedTracker();
+  const observed=rotatedHand(0.7), wrong=rotatedHand(2.7);
+  for(let t=33;t<=330;t+=33)tracker.update(estimateWristPose(observed.landmarks,rotationView,{worldLandmarks:wrong.world}),t);
+  const normal=new Vector3(0,0,1).applyQuaternion(tracker.pose.rotation);
+  assert.ok(Math.abs(normal.z-Math.cos(0.7))<0.02);
+  assert.equal(tracker.diagnostics.state,'corrected');
+});
+test('image-guided rotation permits a full turn in either direction for both mirrored hands',()=>{
+  for(const right of [false,true])for(const mirror of [false,true])for(const direction of [-1,1]){
+    const tracker=calibratedTracker({right,mirror});
+    for(let degrees=3;degrees<=360;degrees+=3){
+      const angle=direction*degrees*Math.PI/180;
+      tracker.update(rotationPose(angle,{right,mirror}),degrees*11);
+      const expected=new Quaternion().setFromAxisAngle(new Vector3(0,1,0),mirror?-angle:angle);
+      assert.ok(tracker.pose.rotation.angleTo(expected)<0.16,`${right}/${mirror}/${direction}/${degrees}`);
+    }
+  }
+});
+test('inconsistent palm geometry expires rotation even while landmarks keep arriving',()=>{
+  const tracker=calibratedTracker(), hand=rotatedHand(0);
+  hand.landmarks[9].y+=0.45;
+  const bad=estimateWristPose(hand.landmarks,rotationView,{worldLandmarks:hand.world});
+  for(let t=33;t<=330;t+=33)tracker.update(bad,t);
+  assert.equal(tracker.diagnostics.state,'uncertain');assert.equal(tracker.sample(330),null);
+  for(let t=363;t<=660;t+=33)tracker.update(rotationPose(0),t);
+  assert.ok(tracker.sample(660));
+});
+test('calibrated image scale resists changing inferred bone lengths while respecting zoom and user size',()=>{
+  const tracker=calibratedTracker(), original=tracker.pose.size, originalRadius=tracker.pose.wristRadius;
+  const hand=rotatedHand(0);
+  for(const p of hand.world)p.x*=0.35;
+  for(let t=33;t<=990;t+=33)tracker.update(estimateWristPose(hand.landmarks,rotationView,{worldLandmarks:hand.world}),t);
+  assert.ok(Math.abs(tracker.pose.size-original)<0.01);
+  for(let t=1023;t<=1980;t+=33)tracker.update(estimateWristPose(hand.landmarks,rotationView,{worldLandmarks:hand.world,scale:1.5}),t);
+  assert.ok(Math.abs(tracker.pose.size/original-1.5)<0.02);
+  assert.ok(Math.abs(tracker.pose.wristRadius-originalRadius)<0.01);
+  for(const p of hand.landmarks){p.x=0.5+(p.x-0.5)*1.25;p.y=0.5+(p.y-0.5)*1.25;}
+  for(let t=2013;t<=2970;t+=33)tracker.update(estimateWristPose(hand.landmarks,rotationView,{worldLandmarks:hand.world,scale:1.5}),t);
+  assert.ok(Math.abs(tracker.pose.size/original-1.875)<0.03);
+});
+test('out-of-order results are discarded and capture age determines expiry',()=>{
+  const tracker=calibratedTracker();tracker.update(rotationPose(0.5),33);
+  const rotation=tracker.pose.rotation.clone();
+  assert.equal(tracker.update(rotationPose(-0.5),20),false);
+  assert.ok(tracker.pose.rotation.angleTo(rotation)<1e-6);
+  assert.equal(tracker.sample(254),null);
 });
 test('case revolves around a fixed wrist centre with radius independent of watch size', () => {
   const center=new Vector3(23,45,0), radius=30;

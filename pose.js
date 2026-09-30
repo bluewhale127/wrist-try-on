@@ -1,4 +1,5 @@
 import { Matrix4, Quaternion, Vector3 } from './vendor/three/three.module.js';
+import { palmTemplate, fitPalmProjection } from './palm-projection.js?v=4';
 
 // The video and 3D overlay both use CSS object-fit: cover. All units here are CSS pixels.
 export function coverTransform(videoWidth, videoHeight, width, height) {
@@ -36,12 +37,13 @@ export function estimateWristPose(landmarks, view, { mirror = false, offset = 0.
   const heading = Math.atan2(-y2.x, y2.y);
   let palmWidth = index.distanceTo(pinky), rotationQuality = 0;
   let rotation = new Quaternion().setFromAxisAngle(Z, heading);
-  let thumbUsed = false;
+  let thumbUsed = false, worldPalm = null;
   if (worldLandmarks?.length === 21 && PALM.every(i => finitePoint(worldLandmarks[i]))) {
     const worldPoint = i => {
       const p = worldLandmarks[i]; return new Vector3(mirror ? -p.x : p.x, -p.y, -p.z);
     };
     const world = PALM.map(worldPoint);
+    worldPalm = world;
     const wy = world[1].clone().add(world[2]).add(world[3]).add(world[4]).multiplyScalar(0.25).sub(world[0]);
     const wx = world[1].clone().sub(world[4]);
     if (wy.length() > 0.005 && wx.length() > 0.005) {
@@ -83,7 +85,7 @@ export function estimateWristPose(landmarks, view, { mirror = false, offset = 0.
   palmWidth = clamp(palmWidth, projectedLength * 0.48, projectedLength * 1.35);
   const position = wrist.clone().addScaledVector(along, -offset);
   const size = palmWidth * 0.65 * scale;
-  return { position, rotation, size, wristRadius: palmWidth * 0.65 * 0.46, heading, rotationQuality, thumbUsed };
+  return { position, rotation, size, wristRadius: palmWidth * 0.65 * 0.46, heading, rotationQuality, thumbUsed, imagePalm: screen, worldPalm, userScale: scale };
 }
 
 // Rotate the case around the wrist centre, not around the centre of the dial.
@@ -105,28 +107,62 @@ export class WristPoseTracker {
     this.pose = null; this.previous = null; this.lastGood = -Infinity; this.speed = 0;
     this.velocity = new Vector3(); this.pending = null; this.pendingRotation = null;
     this.orientationSign = 0; this.angularSpeed = 0; this.reference = null; this.referenceFrames = 0;
+    this.referenceStarted = 0; this.referenceTime = -Infinity; this.templates = []; this.template = null;
+    this.lastRotationGood = -Infinity; this.lastInput = -Infinity;
+    this.previousRotation = null;
+    this.diagnostics = { state: 'calibrating', quality: 0, progress: 0 };
   }
-  orientedRotation(next) {
+  orientedRotation(next, time) {
+    this.diagnostics = { state: 'uncertain', quality: 0, progress: this.orientationSign ? 1 : 0 };
     if (next.rotationQuality < 0.5) return null;
     if (!this.orientationSign) {
       const normalZ = Z.clone().applyQuaternion(next.rotation).z;
-      // Initial reference must show the back of the hand; keep this sign through later rotations and gaps.
-      if (Math.abs(normalZ) < 0.35) { this.reference = null; this.referenceFrames = 0; return null; }
-      if (!this.reference || this.reference.angleTo(next.rotation) > 0.45) {
-        this.reference = next.rotation.clone(); this.referenceFrames = 1; return null;
+      const template = Math.abs(normalZ) >= 0.6 && palmTemplate(next.imagePalm, next.rotation);
+      this.diagnostics.state = 'calibrating';
+      if (!template) { this.reference = null; this.referenceFrames = 0; return null; }
+      if (!this.reference || time - this.referenceTime > 250 || this.reference.angleTo(next.rotation) > 0.25) {
+        this.reference = next.rotation.clone(); this.referenceFrames = 0;
+        this.referenceStarted = time; this.templates = [];
       }
+      this.referenceTime = time;
       this.reference.slerp(next.rotation, 0.5);
-      if (++this.referenceFrames < 3) return null;
+      this.templates.push(template); if(this.templates.length>30)this.templates.shift();
+      this.diagnostics.progress = Math.min(1,(time-this.referenceStarted)/500);
+      if (++this.referenceFrames < 6 || time - this.referenceStarted < 500) return null;
       this.orientationSign = normalZ >= 0 ? 1 : -1;
+      this.template = template.map((_,i)=>this.templates.reduce((sum,t)=>sum.add(t[i]),new Vector3()).multiplyScalar(1/this.templates.length));
+      this.templates = [];
     }
-    return this.orientationSign === 1 ? next.rotation.clone() : next.rotation.clone().multiply(halfTurn);
+    const projection = fitPalmProjection(this.template, next.imagePalm);
+    if (!projection) return null;
+    const raw = this.orientationSign === 1 ? next.rotation.clone() : next.rotation.clone().multiply(halfTurn);
+    const candidates = projection.rotations.map(q=>this.orientationSign === 1 ? q : q.multiply(halfTurn));
+    const previous = time-this.lastRotationGood < 250 ? this.previousRotation : null;
+    const score = q => previous ? q.angleTo(previous) + 0.2*q.angleTo(raw) : q.angleTo(raw);
+    const rotation = score(candidates[0]) <= score(candidates[1]) ? candidates[0] : candidates[1];
+    const quality = Math.exp(-((projection.residual/0.07)**2));
+    const disagreement = rotation.angleTo(raw);
+    this.diagnostics = { state: quality < 0.35 ? 'uncertain' : disagreement > 0.6 ? 'corrected' : 'tracking',
+      quality, progress: 1, residual: projection.residual, disagreement, rawNormalZ: Z.clone().applyQuaternion(raw).z,
+      fittedNormalZ: projection.normalZ*this.orientationSign };
+    if (quality < 0.35) return null;
+    // One calibrated palm width drives both size and wrist radius. Learned bone
+    // lengths can change when fingers overlap; they must not resize the wrist.
+    const palmWidth = this.template[1].distanceTo(this.template[4])*projection.scale;
+    next.size = palmWidth*0.65*next.userScale;
+    next.wristRadius = palmWidth*0.65*0.46;
+    return rotation;
   }
   update(next, time) {
-    if (!next || !Number.isFinite(time)) return false;
-    const oriented = this.orientedRotation(next);
+    if (!Number.isFinite(time) || time <= this.lastInput) return false;
+    this.lastInput = time;
+    if (!next) { this.diagnostics = { state: 'missing', quality: 0, progress: this.orientationSign ? 1 : 0 }; return false; }
+    next = { ...next };
+    const oriented = this.orientedRotation(next, time);
     if (!this.pose || time - this.lastGood > 250) {
       this.pose = { ...next, position: next.position.clone(), rotation: next.rotation.clone() };
       this.pose.rotation.copy(oriented || new Quaternion().setFromAxisAngle(Z, next.heading));
+      if (oriented) { this.lastRotationGood = time; this.previousRotation = oriented.clone(); }
       this.previous = next.position.clone(); this.lastGood = time; this.speed = 0; this.velocity.set(0, 0, 0); this.pending = null;
       this.pendingRotation = null; this.angularSpeed = 0;
       return true;
@@ -151,14 +187,17 @@ export class WristPoseTracker {
       const jump = angle > 1.3 + dt * 4;
       if (jump && (!this.pendingRotation || this.pendingRotation.angleTo(oriented) > 0.45)) {
         this.pendingRotation = oriented;
+        this.diagnostics.state = 'uncertain';
       } else {
         this.pendingRotation = null;
         this.angularSpeed += cutoffAlpha(dt, 2) * (Math.min(angle / dt, 12) - this.angularSpeed);
         this.pose.rotation.slerp(oriented, cutoffAlpha(dt, 2 + this.angularSpeed * 0.8));
+        this.lastRotationGood = time;
+        this.previousRotation = oriented.clone();
       }
     }
     this.previous.copy(next.position); this.lastGood = time;
     return true;
   }
-  sample(time) { return this.pose && time - this.lastGood <= 220 ? this.pose : null; }
+  sample(time) { return this.pose && time - this.lastGood <= 220 && (!this.orientationSign || time-this.lastRotationGood <= 220) ? this.pose : null; }
 }
