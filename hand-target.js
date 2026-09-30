@@ -20,8 +20,8 @@ function describe(landmarks, handedness, view, index) {
 // silently assign its calibrated watch to an unrelated detection.
 export class HandTarget {
   constructor() { this.reset(); }
-  reset() { this.target = null; this.pending = null; this.lastTime = -Infinity; this.lastInput = -Infinity; this.state = 'waiting'; }
-  select(result, view, time) {
+  reset() { this.target = null; this.pending = null; this.relocation = null; this.lastTime = -Infinity; this.lastInput = -Infinity; this.state = 'waiting'; }
+  select(result, view, time, { allowRelocation = false } = {}) {
     if (!Number.isFinite(time) || time <= this.lastInput) return null;
     this.lastInput = time;
     const hands = (result.landmarks || []).map((points, i) => describe(points, result.handedness?.[i], view, i)).filter(Boolean);
@@ -49,9 +49,28 @@ export class HandTarget {
       return { hand, score: position + 0.6 * Math.abs(Math.log(sizeRatio)) + (wrongSide ? 0.35 : 0) };
     }).filter(Boolean).sort((a, b) => a.score - b.score);
     if (!candidates.length || (candidates[1] && candidates[1].score - candidates[0].score < 0.15)) {
-      this.state = 'lost'; return null;
+      this.state = 'lost';
+      // A selfie often moves the camera and hand together. Do not remain
+      // locked forever to a stale screen location after a brief large move.
+      // Front-camera opt-in only: one same-side, similarly sized hand must
+      // persist at a bounded new location for 350ms. The pose tracker still
+      // checks rotation memory / a dorsal view before showing the watch.
+      const hand = allowRelocation && age > 220 && hands.length === 1 ? hands[0] : null;
+      const ratio = hand && hand.size / target.size, reference = hand && hand.size / target.referenceSize;
+      const position = hand && Math.max(distance(hand.wrist,target.wrist),distance(hand.center,target.center)) / Math.max(hand.size,target.size);
+      if (!hand || !target.side || hand.side !== target.side || ratio < 0.58 || ratio > 1.7 || reference < 0.65 || reference > 1.65 || position > 2.5) {
+        this.relocation = null; return null;
+      }
+      const prior = this.relocation;
+      const consistent = prior && time-prior.time <= 200 && distance(hand.wrist,prior.hand.wrist) < hand.size*0.3 && distance(hand.center,prior.hand.center) < hand.size*0.3 && Math.abs(Math.log(hand.size/prior.hand.size)) < 0.15;
+      this.relocation = { hand, time, started: consistent ? prior.started : time, count: consistent ? prior.count+1 : 1 };
+      this.state = 'recovering';
+      if (this.relocation.count < 4 || time-this.relocation.started < 350) return null;
+      this.target = { ...hand, side: target.side, referenceSize: target.referenceSize };
+      this.relocation = null; this.lastTime = time; this.state = 'reacquired'; return hand.index;
     }
     const chosen = candidates[0].hand;
+    this.relocation = null;
     this.target = { ...chosen, side: target.side || chosen.side, referenceSize: target.referenceSize };
     this.lastTime = time; this.state = 'locked'; return chosen.index;
   }

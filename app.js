@@ -2,9 +2,9 @@ import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { DRACOLoader } from 'three/addons/loaders/DRACOLoader.js';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
-import { estimateWristPose, landmarkPoint, WristPoseTracker, smoothingAlpha } from './pose.js?v=6';
+import { estimateWristPose, landmarkPoint, WristPoseTracker, smoothingAlpha, watchRotationDegrees } from './pose.js?v=73';
 import { HandDetector } from './hand-detector.js?v=5';
-import { HandTarget } from './hand-target.js?v=5';
+import { HandTarget } from './hand-target.js?v=73';
 import { makeSampleWatch, disposeModel, inspectGLB } from './watch.js?v=6';
 import { WristRig, wristDimensions } from './wrist-rig.js?v=71';
 
@@ -44,9 +44,12 @@ function updateFit() {
   for (const id of controls) {
     $(id + '-output').value = id === 'scale' || id.startsWith('wrist-') ? `${Math.round(values[id] * 100)}%` : id === 'offset' ? (Math.abs(values[id] - defaults[id]) < 0.005 ? '기본' : `${Math.round(values[id] * 100)}`) : id === 'height' ? values[id].toFixed(2) : `${values[id]}°`;
   }
-  if (adjustment) {
-    adjustment.rotation.set(THREE.MathUtils.degToRad(values['tilt-x']), THREE.MathUtils.degToRad(values['tilt-y']), THREE.MathUtils.degToRad(values.rotation), 'ZYX');
-  }
+  applyCaseOrientation(values);
+}
+function applyCaseOrientation(values) {
+  if (!adjustment) return;
+  const rotation = watchRotationDegrees(values.rotation, mode === 'live' ? tracker.orientationSign : 1);
+  adjustment.rotation.set(THREE.MathUtils.degToRad(values['tilt-x']), THREE.MathUtils.degToRad(values['tilt-y']), THREE.MathUtils.degToRad(rotation), 'ZYX');
 }
 function applyFit(values) {
   for (const id of controls) $(id).value = values[id];
@@ -152,7 +155,7 @@ async function detect(time) {
     if (time - fpsStart >= 1200) { $('fps').textContent = `${Math.round(detections * 1000 / (time - fpsStart))} 회/초`; fpsStart = time; detections = 0; }
     const values = fit();
     const view = { width, height, videoWidth: video.videoWidth, videoHeight: video.videoHeight };
-    const selected = handTarget.select(result, view, time);
+    const selected = handTarget.select(result, view, time, { allowRelocation: mirror });
     const landmarks = selected === null ? null : result.landmarks[selected];
     const worldLandmarks = selected === null ? null : result.worldLandmarks?.[selected];
     const next = estimateWristPose(landmarks, view, { mirror, offset: values.offset, scale: values.scale, worldLandmarks });
@@ -161,7 +164,7 @@ async function detect(time) {
       const diagnostic = tracker.diagnostics;
       $('tracking-label').textContent = !tracker.orientationSign ? `손등을 펴고 잠깐 유지해 주세요 · ${Math.round(diagnostic.progress*100)}%` : diagnostic.state === 'reorient' ? '손등을 카메라 쪽으로 펴 주세요 · 방향 복구 중' : diagnostic.state === 'reacquiring' ? '기존 손의 회전을 다시 확인하고 있어요' : ['uncertain','outlier'].includes(diagnostic.state) ? '손목 움직임을 다시 확인하고 있어요' : diagnostic.state === 'corrected' ? '화면의 손 모양으로 회전을 보정하고 있어요' : '손목 회전을 따라가고 있어요';
     } else {
-      $('tracking-label').textContent = handTarget.state === 'lost' ? '같은 손을 원래 위치로 · 계속 안 잡히면 손등 기준 맞추기' : tracker.sample(completed) ? '손목을 다시 확인하고 있어요' : '손등과 손가락, 손목을 보여 주세요';
+      $('tracking-label').textContent = handTarget.state === 'recovering' ? '새 위치의 손을 확인 중 · 손등을 잠깐 유지해 주세요' : handTarget.state === 'lost' ? '같은 손을 원래 위치로 · 계속 안 잡히면 손등 기준 맞추기' : tracker.sample(completed) ? '손목을 다시 확인하고 있어요' : '손등과 손가락, 손목을 보여 주세요';
     }
     debugFrame = { next, landmarks, time };
     if ($('debug').checked) {
@@ -171,7 +174,7 @@ async function detect(time) {
         view:{width,height,videoWidth:video.videoWidth,videoHeight:video.videoHeight}, mirror, fit:values,
         landmarks,worldLandmarks,handedness:selected === null ? null : result.handedness?.[selected],
         target:{state:handTarget.state,index:selected,detected:result.landmarks?.length || 0},
-        diagnostic:d, rawRotation:next?.rotation.toArray(), rotation:tracker.pose?.rotation.toArray(),position:tracker.pose?.position.toArray() });
+        diagnostic:d, orientationSign:tracker.orientationSign, caseRotationDegrees:watchRotationDegrees(values.rotation,tracker.orientationSign), rawRotation:next?.rotation.toArray(), rotation:tracker.pose?.rotation.toArray(),position:tracker.pose?.position.toArray() });
       if(diagnosticRecords.length>600)diagnosticRecords.shift();
       $('save-diagnostics').disabled = false;
     }
@@ -185,6 +188,7 @@ function render(time) {
   const dt = (time - previousFrame) / 1000;
   previousFrame = time;
   const values = fit();
+  applyCaseOrientation(values);
   if (mode === 'live') {
     void detect(time);
   }
@@ -315,7 +319,7 @@ $('calibrate').addEventListener('click', () => {
 });
 $('save-diagnostics').addEventListener('click',()=>{
   if(!diagnosticRecords.length)return;
-  const blob=new Blob([JSON.stringify({version:'0.7.2',engine,recordedAt:new Date().toISOString(),frames:diagnosticRecords})],{type:'application/json'});
+  const blob=new Blob([JSON.stringify({version:'0.7.3',engine,recordedAt:new Date().toISOString(),frames:diagnosticRecords})],{type:'application/json'});
   const url=URL.createObjectURL(blob), link=document.createElement('a');link.href=url;link.download='wrist-diagnostics.json';link.click();setTimeout(()=>URL.revokeObjectURL(url),1000);
 });
 $('start').addEventListener('click', () => mode === 'idle' ? startCamera() : stopCamera());

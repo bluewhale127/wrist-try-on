@@ -93,6 +93,13 @@ export function wristSurfacePosition(center, rotation, radius) {
   return new Vector3(0, 0, radius).applyQuaternion(rotation).add(center);
 }
 
+// Raw palm +X points toward the thumb. The dorsal-frame half turn can reverse
+// that axis (opposite hand or selfie reflection). Keep 6 o'clock on the thumb
+// side using the sign fixed at calibration, never a noisy per-frame label.
+export function watchRotationDegrees(rotation, orientationSign = 1) {
+  return rotation + (orientationSign === -1 ? 180 : 0);
+}
+
 export function smoothingAlpha(elapsedSeconds, response = 16) {
   return 1 - Math.exp(-Math.min(0.1, Math.max(0, elapsedSeconds)) * response);
 }

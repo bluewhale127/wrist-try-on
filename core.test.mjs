@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { estimateWristPose, coverTransform, landmarkPoint, smoothingAlpha, WristPoseTracker, wristSurfacePosition } from './pose.js';
+import { estimateWristPose, coverTransform, landmarkPoint, smoothingAlpha, WristPoseTracker, wristSurfacePosition, watchRotationDegrees } from './pose.js';
 import { Quaternion, Vector3 } from './vendor/three/three.module.js';
 import { palmTemplate, fitPalmProjection } from './palm-projection.js';
 import { HandTarget } from './hand-target.js';
@@ -180,6 +180,26 @@ test('image-guided rotation permits a full turn in either direction for both mir
     }
   }
 });
+
+test('6 oclock stays toward thumb and 12 toward pinky for both hands, cameras and full turns',()=>{
+  for(const right of [false,true])for(const mirror of [false,true])for(const direction of [-1,1]){
+    const tracker=calibratedTracker({right,mirror}), sign=tracker.orientationSign;
+    for(let degrees=0;degrees<=360;degrees+=3){
+      const raw=rotationPose(direction*degrees*Math.PI/180,{right,mirror});
+      tracker.update(raw,33+degrees*22);
+      const caseRotation=new Quaternion().setFromAxisAngle(new Vector3(0,0,1),watchRotationDegrees(90,sign)*Math.PI/180);
+      const six=new Vector3(0,-1,0).applyQuaternion(caseRotation).applyQuaternion(tracker.pose.rotation);
+      const twelve=new Vector3(0,1,0).applyQuaternion(caseRotation).applyQuaternion(tracker.pose.rotation);
+      const towardThumb=new Vector3(1,0,0).applyQuaternion(raw.rotation);
+      assert.ok(six.dot(towardThumb)>0.98,`${right}/${mirror}/${direction}/${degrees}`);
+      assert.ok(twelve.dot(towardThumb)<-0.98);
+      assert.equal(tracker.orientationSign,sign);
+    }
+  }
+  // Keep the user's model correction as an offset, including imported GLBs.
+  assert.equal(watchRotationDegrees(105,-1)-watchRotationDegrees(90,-1),15);
+  assert.equal(watchRotationDegrees(90,1),90);
+});
 test('inconsistent palm geometry expires rotation even while landmarks keep arriving',()=>{
   const tracker=calibratedTracker(), hand=rotatedHand(0);
   hand.landmarks[9].y+=0.45;
@@ -299,6 +319,37 @@ test('ambiguous overlapping hands and invalid or stale observations do not updat
   assert.equal(target.select(detectedHands(targetHand()),rotationView,180),null);
   const bad=targetHand();bad.points[5].x=NaN;
   assert.equal(target.select(detectedHands(bad),rotationView,216),null);
+});
+
+test('front camera reacquires a stable same-side hand at a new bounded location',()=>{
+  const target=lockedTarget(), moved=targetHand(0.77), options={allowRelocation:true};
+  target.select(detectedHands(),rotationView,400,options);
+  for(const t of [500,600,700,800]){
+    assert.equal(target.select(detectedHands(moved),rotationView,t,options),null);
+    assert.equal(target.state,'recovering');
+  }
+  assert.equal(target.select(detectedHands(moved),rotationView,900,options),0);
+  assert.equal(target.state,'reacquired');
+  assert.equal(target.select(detectedHands(moved),rotationView,1000,options),0);
+  assert.equal(target.state,'locked');
+});
+
+test('front relocation rejects other-side, unknown-side, tiny, far and ambiguous hands',()=>{
+  const unknown=targetHand(0.77), unknownResult=detectedHands(unknown);unknownResult.handedness[0][0].score=0.7;
+  for(const result of [detectedHands(targetHand(0.77,0.5,1,'Right')),unknownResult,detectedHands(targetHand(0.77,0.5,0.4)),detectedHands(targetHand(1.2)),detectedHands(targetHand(0.76),targetHand(0.78))]){
+    const target=lockedTarget();
+    for(let t=500;t<3000;t+=100)assert.equal(target.select(result,rotationView,t,{allowRelocation:true}),null);
+  }
+});
+
+test('front relocation needs consecutive stable observations and cannot change rear-camera gates',()=>{
+  const rear=lockedTarget(), front=lockedTarget(), moved=targetHand(0.77);
+  for(let t=500;t<=2000;t+=100){
+    assert.equal(rear.select(detectedHands(moved),rotationView,t),null);
+    const result=t%300===0?detectedHands():detectedHands(moved);
+    assert.equal(front.select(result,rotationView,t,{allowRelocation:true}),null);
+  }
+  front.reset();assert.equal(front.relocation,null);
 });
 test('case revolves around a fixed wrist centre with radius independent of watch size', () => {
   const center=new Vector3(23,45,0), radius=30;
