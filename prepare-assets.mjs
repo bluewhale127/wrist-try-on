@@ -39,3 +39,20 @@ if (!matches(model)) {
   await writeFile(modelPath, model);
 }
 console.log('Local assets are ready.');
+
+const wristAssets = JSON.parse(await readFile(path.join(root, 'wrist-assets.json'), 'utf8'));
+await mkdir(path.join(vendor, 'wrist'), { recursive: true });
+for (const asset of wristAssets.files) {
+  const target = path.join(vendor, 'wrist', asset.name);
+  let data; try { data = await readFile(target); } catch {}
+  const valid = bytes => bytes && createHash('sha256').update(bytes).digest('hex') === asset.sha256;
+  if (!valid(data)) {
+    const url = `https://raw.githubusercontent.com/WebAR-rocks/WebAR.rocks.hand/${wristAssets.revision}/${asset.source}`;
+    const response = await fetch(url, { signal: AbortSignal.timeout(120000) });
+    if (!response.ok) throw new Error(`Wrist asset download failed: ${asset.name} (${response.status})`);
+    data = Buffer.from(await response.arrayBuffer());
+    if (!valid(data)) throw new Error(`Wrist asset checksum mismatch: ${asset.name}`);
+    await writeFile(target, data);
+  }
+}
+console.log('Pinned wrist tracking assets are ready.');

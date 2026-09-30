@@ -1,0 +1,20 @@
+{
+  "revision": "4e168a652f7bee6e63e3cb6e6732df40ed709f8d",
+  "files": [
+    {
+      "source": "dist/WebARRocksHand.module.js",
+      "name": "WebARRocksHand.module.js",
+      "sha256": "9658c1585ab5f37edbdadf7ef1edb3c4783068f179ae62c417ed9fd81333564c"
+    },
+    {
+      "source": "neuralNets/NN_WRISTBACK_45.json",
+      "name": "NN_WRISTBACK_45.json",
+      "sha256": "e626c61bc93a7d58d9dd43833209847ebc821be62c26ce190d32a36d173845cc"
+    },
+    {
+      "source": "LICENSE",
+      "name": "LICENSE",
+      "sha256": "bbf1a9c23e75612ec0be19af7a8d71bbaa2deae803eeec7b8288e28d74352027"
+    }
+  ]
+}
