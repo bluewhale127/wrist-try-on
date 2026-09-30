@@ -2,7 +2,8 @@ import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { DRACOLoader } from 'three/addons/loaders/DRACOLoader.js';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
-import { estimateWristPose, smoothingAlpha } from './pose.js';
+import { estimateWristPose, WristPoseTracker, smoothingAlpha } from './pose.js?v=2';
+import { HandDetector } from './hand-detector.js?v=2';
 import { makeSampleWatch, makeOccluder, disposeModel, inspectGLB } from './watch.js';
 
 const $ = id => document.getElementById(id);
@@ -12,10 +13,11 @@ const defaults = { scale: 1, offset: 0.38, rotation: 90, 'tilt-x': 0, 'tilt-y': 
 let renderer, scene, camera, anchor, adjustment, occluder, watch;
 let mediaStream = null, mode = 'idle', operation = 0, facingMode = 'environment', mirror = false;
 let handLandmarker = null, detectorPromise = null;
-let targetPose = null, poseInitialized = false, lastGood = 0, lastDetection = 0, lastVideoTime = -1;
+const tracker = new WristPoseTracker();
+let poseInitialized = false, lastDetection = 0, lastVideoTime = -1, detecting = false;
 let width = 1, height = 1, animationId, previousFrame = performance.now();
 let fpsStart = 0, detections = 0, modelOperation = 0;
-let inferenceInterval = 70;
+let inferenceInterval = 33;
 const reduceMotion = matchMedia('(prefers-reduced-motion: reduce)').matches;
 
 function notice(message, isError = false) {
@@ -50,7 +52,7 @@ function updateMode(next) {
   $('camera-label').textContent = next === 'idle' ? '카메라 꺼짐' : next === 'loading' ? '준비 중' : mirror ? '전면 카메라' : '후면 카메라';
   $('tracking-label').textContent = next === 'idle' ? '3D 미리보기 · 카메라 꺼짐' : next === 'loading' ? '손 추적을 준비하고 있어요' : '손등과 손가락, 손목을 보여 주세요';
   $('fps').textContent = '';
-  targetPose = null; poseInitialized = false; lastGood = 0;
+  tracker.reset(); poseInitialized = false;
 }
 function stopCamera(message = '카메라를 껐습니다. 시계 모델을 계속 살펴볼 수 있어요.') {
   operation++;
@@ -65,19 +67,7 @@ async function loadDetector() {
   if (handLandmarker) return handLandmarker;
   if (detectorPromise) return detectorPromise;
   detectorPromise = (async () => {
-    const { FilesetResolver, HandLandmarker } = await import('./vendor/vision/vision_bundle.mjs');
-    const files = await FilesetResolver.forVisionTasks(new URL('./vendor/vision/wasm/', import.meta.url).href);
-    const options = {
-      baseOptions: { modelAssetPath: new URL('./vendor/vision/hand_landmarker.task', import.meta.url).href, delegate: 'GPU' },
-      runningMode: 'VIDEO', numHands: 1,
-      minHandDetectionConfidence: 0.6, minHandPresenceConfidence: 0.6, minTrackingConfidence: 0.6,
-    };
-    try { handLandmarker = await HandLandmarker.createFromOptions(files, options); }
-    catch {
-      options.baseOptions.delegate = 'CPU';
-      handLandmarker = await HandLandmarker.createFromOptions(files, options);
-      inferenceInterval = 100;
-    }
+    handLandmarker = await new HandDetector().initialize();
     return handLandmarker;
   })();
   try { return await detectorPromise; }
@@ -126,26 +116,29 @@ async function startCamera() {
     console.error('Camera initialization failed:', error);
   }
 }
-function detect(time) {
-  if (!handLandmarker || video.readyState < 2 || !video.videoWidth || time - lastDetection < inferenceInterval || video.currentTime === lastVideoTime) return;
+async function detect(time) {
+  if (detecting || !handLandmarker || video.readyState < 2 || !video.videoWidth || time - lastDetection < inferenceInterval || video.currentTime === lastVideoTime) return;
+  detecting = true;
+  const id = operation;
   lastVideoTime = video.currentTime; lastDetection = time;
-  const start = performance.now();
-  const result = handLandmarker.detectForVideo(video, time);
-  inferenceInterval = Math.max(70, Math.min(160, (performance.now() - start) * 1.7));
-  detections++;
-  if (time - fpsStart >= 1200) { $('fps').textContent = `${Math.round(detections * 1000 / (time - fpsStart))} 추적/초`; fpsStart = time; detections = 0; }
-  const values = fit();
-  const next = estimateWristPose(result.landmarks?.[0], { width, height, videoWidth: video.videoWidth, videoHeight: video.videoHeight }, { mirror, offset: values.offset, scale: values.scale });
-  if (next) {
-    if (time - lastGood > 240) poseInitialized = false;
-    targetPose = next; lastGood = time;
-    $('tracking-label').textContent = '손목을 따라 시계를 맞추고 있어요';
-    stage.classList.add('tracked');
-  } else {
-    targetPose = null;
-    $('tracking-label').textContent = result.landmarks?.length ? '손등을 카메라 쪽으로 조금 더 돌려 주세요' : '손등과 손가락, 손목을 보여 주세요';
-    stage.classList.remove('tracked');
-  }
+  try {
+    const { result, elapsed } = await handLandmarker.detect(video, time);
+    if (id !== operation || mode !== 'live') return;
+    const completed = performance.now();
+    inferenceInterval = Math.max(33, Math.min(120, elapsed * (handLandmarker.backend.startsWith('worker') ? 1.05 : 1.5)));
+    detections++;
+    if (time - fpsStart >= 1200) { $('fps').textContent = `${Math.round(detections * 1000 / (time - fpsStart))} 추적/초`; fpsStart = time; detections = 0; }
+    const values = fit();
+    const next = estimateWristPose(result.landmarks?.[0], { width, height, videoWidth: video.videoWidth, videoHeight: video.videoHeight }, { mirror, offset: values.offset, scale: values.scale, worldLandmarks: result.worldLandmarks?.[0] });
+    if (tracker.update(next, completed)) {
+      $('tracking-label').textContent = '손목을 따라 시계를 맞추고 있어요';
+      stage.classList.add('tracked');
+    } else {
+      $('tracking-label').textContent = tracker.sample(completed) ? '손목을 다시 확인하고 있어요' : '손등과 손가락, 손목을 보여 주세요';
+    }
+  } catch (error) {
+    if (id === operation && mode === 'live') { stopCamera(); notice('손 추적이 중단되었습니다. 카메라를 다시 시작해 주세요.', true); console.error(error); }
+  } finally { detecting = false; }
 }
 function render(time) {
   animationId = requestAnimationFrame(render);
@@ -153,8 +146,7 @@ function render(time) {
   const dt = (time - previousFrame) / 1000;
   previousFrame = time;
   if (mode === 'live') {
-    try { detect(time); }
-    catch (error) { stopCamera(); notice('손 추적이 중단되었습니다. 카메라를 다시 시작해 주세요.', true); console.error(error); }
+    void detect(time);
   }
   if (mode === 'idle') {
     anchor.visible = true;
@@ -163,14 +155,16 @@ function render(time) {
     anchor.rotation.set(0.2, reduceMotion ? -0.25 : Math.sin(time * 0.0003) * 0.25 - 0.15, -0.08);
     occluder.visible = false;
   } else {
-    anchor.visible = mode === 'live' && !!targetPose && time - lastGood < 240;
+    const targetPose = tracker.sample(time);
+    anchor.visible = mode === 'live' && !!targetPose;
+    stage.classList.toggle('tracked', anchor.visible);
     if (anchor.visible) {
-      const alpha = poseInitialized ? smoothingAlpha(dt) : 1;
+      const alpha = poseInitialized ? smoothingAlpha(dt, 40) : 1;
       anchor.position.lerp(targetPose.position, alpha);
       anchor.quaternion.slerp(targetPose.rotation, alpha);
       anchor.scale.lerp(new THREE.Vector3().setScalar(targetPose.size), alpha);
       poseInitialized = true;
-    }
+    } else poseInitialized = false;
     occluder.visible = $('occlusion').checked;
   }
   renderer.render(scene, camera);
@@ -234,7 +228,7 @@ try {
     ({ width, height } = stage.getBoundingClientRect());
     renderer.setSize(width, height, false);
     camera.left = -width / 2; camera.right = width / 2; camera.top = height / 2; camera.bottom = -height / 2; camera.updateProjectionMatrix();
-    targetPose = null; poseInitialized = false;
+    tracker.reset(); poseInitialized = false;
   }).observe(stage);
   animationId = requestAnimationFrame(render);
 } catch (error) {
