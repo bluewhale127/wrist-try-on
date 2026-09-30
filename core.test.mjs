@@ -333,6 +333,91 @@ test('a missing frame cancels accumulated surface confirmation',()=>{
   tracker.update(rotationPose(Math.PI),2650);assert.ok(tracker.sample(2650));
 });
 
+test('front rotation reversals escape a biased calibration on either hand at phone cadences',()=>{
+  for(const right of [false,true])for(const direction of [-1,1])for(const dt of [33,66,100]){
+    const options={right,mirror:true},tracker=new WristPoseTracker();
+    // Image and landmark depth describe a frontal hand. A plausible initial
+    // world tilt stretches its reference so the two fitted solutions never meet.
+    for(let t=-600;t<=0;t+=50){
+      const pose=rotationPose(0,options);pose.rotation.copy(rotationPose(direction*.45,options).rotation);tracker.update(pose,t);
+    }
+    const sign=tracker.watchOrientationSign;
+    const sequence=[...Array.from({length:20},(_,i)=>(i+1)*direction*.05),
+      ...Array.from({length:40},(_,i)=>direction*(.95-i*.05)),
+      ...Array.from({length:40},(_,i)=>direction*(-.95+i*.05))];
+    let time=0,hidden=0,repairs=0;
+    for(const angle of sequence){
+      time+=dt;const raw=rotationPose(angle,options);tracker.update(raw,time);
+      repairs+=!!tracker.diagnostics.depthRealigned;
+      const pose=tracker.sample(time);if(!pose){hidden++;continue;}
+      const normal=new Vector3(0,0,1).applyQuaternion(pose.rotation);
+      if(Math.abs(angle)>.6)assert.ok(normal.x*Math.sin(-angle)>0,`wrong depth direction ${right}/${direction}/${dt}/${angle}`);
+      const six=new Vector3(0,-1,0).applyAxisAngle(new Vector3(0,0,1),watchRotationDegrees(90,tracker.watchOrientationSign)*Math.PI/180).applyQuaternion(pose.rotation).setZ(0).normalize();
+      const radial=raw.imagePalm[1].clone().sub(raw.imagePalm[4]).setZ(0).normalize();
+      assert.ok(six.dot(radial)>.99);assert.equal(tracker.watchOrientationSign,sign);
+    }
+    assert.ok(hidden<=12,'only brief direction checks, not permanent disappearance');
+    if(dt<100)assert.ok(repairs>=2,'both real reversals recovered');
+    assert.ok(tracker.sample(time));
+  }
+});
+
+function tiltedFrontTracker(){
+  const tracker=calibratedTracker({mirror:true});
+  for(let i=1;i<=20;i++)tracker.update(rotationPose(i*.04,{mirror:true}),i*50);
+  return tracker;
+}
+
+test('one contradictory front depth frame holds orientation without hiding or flipping',()=>{
+  const tracker=tiltedFrontTracker(),before=tracker.pose.rotation.clone();
+  tracker.update(rotationPose(-.8,{mirror:true}),1066);
+  assert.ok(tracker.diagnostics.depthPending);assert.ok(tracker.sample(1066));
+  assert.ok(tracker.pose.rotation.angleTo(before)<1e-8);
+  tracker.update(rotationPose(.8,{mirror:true}),1132);
+  assert.ok(tracker.sample(1132));assert.equal(tracker.depthEvidence,null);
+  assert.ok(tracker.pose.rotation.angleTo(new Quaternion().setFromAxisAngle(new Vector3(0,1,0),-.8))<.05);
+});
+
+test('large front depth repair hides first, reattaches after sustained evidence and clears angular memory',()=>{
+  const tracker=tiltedFrontTracker(),sign=tracker.watchOrientationSign;
+  tracker.update(rotationPose(-.8,{mirror:true}),1066);assert.ok(tracker.sample(1066));
+  for(const t of [1132,1198]){
+    tracker.update(rotationPose(-.8,{mirror:true}),t);assert.equal(tracker.sample(t),null);
+  }
+  tracker.update(rotationPose(-.8,{mirror:true}),1264);
+  assert.ok(tracker.diagnostics.depthRealigned);assert.ok(tracker.sample(1264));
+  assert.ok(tracker.pose.rotation.angleTo(new Quaternion().setFromAxisAngle(new Vector3(0,1,0),.8))<1e-6);
+  assert.equal(tracker.rotationVelocity.length(),0);assert.equal(tracker.watchOrientationSign,sign);
+  tracker.reset();assert.equal(tracker.depthEvidence,null);assert.equal(tracker.depthBlocked,false);
+});
+
+test('front depth repair rejects disagreeing depth outputs, weak geometry and interrupted evidence',()=>{
+  for(const kind of ['world-only','landmark-only','geometry','missing']){
+    const tracker=tiltedFrontTracker();
+    for(let i=1;i<=12;i++){
+      const time=1000+i*66;
+      if(kind==='missing'&&i%3===0){tracker.update(null,time);continue;}
+      const observed=rotatedHand(kind==='world-only'?.8:-.8);
+      const world=rotatedHand(kind==='landmark-only'?.8:-.8);
+      if(kind==='geometry')observed.landmarks[9].y+=.45;
+      const pose=estimateWristPose(observed.landmarks,rotationView,{mirror:true,worldLandmarks:world.world});
+      tracker.update(pose,time);
+      assert.ok(!tracker.diagnostics.depthRealigned,kind);
+    }
+    if(kind==='world-only'||kind==='landmark-only')assert.ok(tracker.pose.rotation.angleTo(new Quaternion().setFromAxisAngle(new Vector3(0,1,0),-.8))<.05);
+  }
+});
+
+test('front depth repair cannot enable itself on the rear camera',()=>{
+  const tracker=calibratedTracker();
+  for(let i=1;i<=20;i++)tracker.update(rotationPose(i*.04),i*50);
+  for(let t=1066;t<=1600;t+=66){
+    tracker.update(rotationPose(-.8),t);
+    assert.ok(!tracker.diagnostics.depthPending);assert.ok(!tracker.diagnostics.depthRealigned);
+  }
+  assert.equal(tracker.depthEvidence,null);assert.equal(tracker.depthBlocked,false);
+});
+
 function detectedHands(...hands) {
   return {landmarks:hands.map(h=>h.points),handedness:hands.map(h=>[{categoryName:h.side||'Left',score:0.98}])};
 }

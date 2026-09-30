@@ -26,7 +26,8 @@ const halfTurn = new Quaternion().setFromAxisAngle(Y, Math.PI);
 export function estimateWristPose(landmarks, view, { mirror = false, offset = 0.38, scale = 1, worldLandmarks } = {}) {
   if (!landmarks || landmarks.length !== 21) return null;
   if (PALM.some(i => !finitePoint(landmarks[i]))) return null;
-  const screen = PALM.map(i => landmarkPoint(landmarks[i], view, mirror).setZ(0));
+  const observed = PALM.map(i => landmarkPoint(landmarks[i], view, mirror));
+  const screen = observed.map(p => p.clone().setZ(0));
   const [wrist, index, middle, ring, pinky] = screen;
   // Average the rigid knuckles, not finger tips: curling fingers should not steer the watch.
   const center = index.clone().add(middle).add(ring).add(pinky).multiplyScalar(0.25);
@@ -85,7 +86,22 @@ export function estimateWristPose(landmarks, view, { mirror = false, offset = 0.
   palmWidth = clamp(palmWidth, projectedLength * 0.48, projectedLength * 1.35);
   const position = wrist.clone().addScaledVector(along, -offset);
   const size = palmWidth * 0.65 * scale;
-  return { position, rotation, size, wristRadius: palmWidth * 0.65 * 0.46, heading, rotationQuality, thumbUsed, imagePalm: screen, worldPalm, userScale: scale };
+  // Normalized landmark depth and world depth come from the same model. Their
+  // agreement is a consistency check, not an independent depth measurement.
+  let depthRotation = null;
+  if (mirror) {
+    const dy = observed.slice(1).reduce((sum,p)=>sum.add(p),new Vector3()).multiplyScalar(0.25).sub(observed[0]);
+    const dx = observed[1].clone().sub(observed[4]);
+    if (dy.length() > 12) {
+      dy.normalize(); dx.addScaledVector(dy,-dx.dot(dy));
+      if (dx.length() > 8) {
+        dx.normalize();
+        const normal = new Vector3().crossVectors(dx,dy).normalize();
+        depthRotation = new Quaternion().setFromRotationMatrix(new Matrix4().makeBasis(dx,dy,normal));
+      }
+    }
+  }
+  return { position, rotation, size, wristRadius: palmWidth * 0.65 * 0.46, heading, rotationQuality, thumbUsed, imagePalm: screen, worldPalm, userScale: scale, mirror, depthRotation };
 }
 
 // Rotate the case around the wrist centre, not around the centre of the dial.
@@ -127,11 +143,12 @@ export class WristPoseTracker {
     this.lastRotationGood = -Infinity; this.lastInput = -Infinity;
     this.previousRotation = null; this.rotationVelocity = new Vector3(); this.recovery = null; this.branchEvidence = null;
     this.surfaceEvidence = null;
+    this.depthEvidence = null; this.depthBlocked = false;
     this.diagnostics = { state: 'calibrating', quality: 0, progress: 0 };
   }
   orientedRotation(next, time) {
     this.diagnostics = { state: 'uncertain', quality: 0, progress: this.orientationSign ? 1 : 0 };
-    if (next.rotationQuality < 0.5) { this.branchEvidence = null; this.surfaceEvidence = null; return null; }
+    if (next.rotationQuality < 0.5) { this.branchEvidence = null; this.surfaceEvidence = null; this.depthEvidence = null; return null; }
     if (!this.orientationSign) {
       const normalZ = Z.clone().applyQuaternion(next.rotation).z;
       const template = Math.abs(normalZ) >= 0.6 && palmTemplate(next.imagePalm, next.rotation);
@@ -154,7 +171,7 @@ export class WristPoseTracker {
       this.templates = [];
     }
     const projection = fitPalmProjection(this.template, next.imagePalm);
-    if (!projection) { this.surfaceEvidence = null; return null; }
+    if (!projection) { this.surfaceEvidence = null; this.depthEvidence = null; return null; }
     const raw = this.orientationSign === 1 ? next.rotation.clone() : next.rotation.clone().multiply(halfTurn);
     const candidates = projection.rotations.map(q=>this.orientationSign === 1 ? q : q.multiply(halfTurn));
     // Display expiry and orientation memory are different. A short occlusion
@@ -194,12 +211,38 @@ export class WristPoseTracker {
     const surfaceConfirmed = !!this.surfaceEvidence && this.surfaceEvidence.count >= 4 && time-this.surfaceEvidence.started >= 300;
     const surfaceRealigned = surfaceConfirmed && rotation.angleTo(rawChoice) > 0.35;
     if (surfaceRealigned) { rotation = rawChoice; branchConfirmed = true; }
+    // A biased reference palm may keep the two image solutions apart even at
+    // a real turning point. The old near-previous gate then locks in the wrong
+    // depth branch. Front cameras can reselect it from sustained, unambiguous
+    // agreement of both depth outputs; one frame cannot reverse the watch.
+    let depthPending = false, depthRealigned = false;
+    const depth = next.depthRotation?.clone();
+    if (depth && this.orientationSign === -1) depth.multiply(halfTurn);
+    const other = candidates.find(q=>q!==rawChoice);
+    const evidence = this.depthEvidence;
+    const depthConflict = next.mirror && depth && previous && !clearSurface && quality >= 0.45 &&
+      (age <= 180 || (evidence && time-evidence.time <= 180 && age <= 600)) &&
+      rotation !== rawChoice && rawChoice.angleTo(raw) < 0.65 &&
+      other.angleTo(raw)-rawChoice.angleTo(raw) > 0.4 &&
+      rawChoice.angleTo(depth) < 0.7 && other.angleTo(depth)-rawChoice.angleTo(depth) > 0.3;
+    if (depthConflict) {
+      const stable = evidence && time-evidence.time <= 180 && evidence.rotation.angleTo(rawChoice) < 0.3+(time-evidence.time)*0.006;
+      this.depthEvidence = {rotation:rawChoice.clone(),time,started:stable?evidence.started:time,count:stable?evidence.count+1:1};
+      const confirmed = this.depthEvidence.count >= 3 && time-this.depthEvidence.started >= 180;
+      // Hide before a large reattachment instead of visibly sweeping the dial
+      // through the wrist. The first contradictory frame only holds the pose.
+      if (this.depthEvidence.count >= 2 && rawChoice.angleTo(previous) > 0.7) this.depthBlocked = true;
+      if (confirmed) { rotation = rawChoice; branchConfirmed = true; depthRealigned = true; }
+      else depthPending = true;
+    } else { this.depthEvidence = null; this.depthBlocked = false; }
     const disagreement = rotation.angleTo(raw);
     this.diagnostics = { state: quality < 0.35 ? 'uncertain' : disagreement > 0.6 ? 'corrected' : 'tracking',
       quality, progress: 1, residual: projection.residual, disagreement, rawNormalZ,
       fittedNormalZ, surface:Math.abs(fittedNormalZ)>=0.86?surface:'edge', surfaceConfirmed, surfaceRealigned,
-      memoryAgeMs: Number.isFinite(age) ? age : null, branchConfirmed };
+      memoryAgeMs: Number.isFinite(age) ? age : null, branchConfirmed,
+      depthPending, depthRealigned, depthEvidenceFrames:this.depthEvidence?.count || 0 };
     if (quality < 0.35) { this.recovery = null; this.branchEvidence = null; this.surfaceEvidence = null; return null; }
+    if (depthPending) { this.diagnostics.state = 'depth-check'; return null; }
     if (this.previousRotation && age > 220) {
       const longGap = age > 1500;
       const separated = candidates[0].angleTo(candidates[1]) > 0.5;
@@ -209,14 +252,14 @@ export class WristPoseTracker {
       // palm-facing anchor. Its dial stays on the back of the wrist, occluded.
       const backFacing = this.diagnostics.fittedNormalZ > 0.55 && this.diagnostics.rawNormalZ > 0.5;
       const nearReference = rotation.angleTo(recoveryReference) < 0.65 || this.diagnostics.fittedNormalZ > 0.95;
-      if (!surfaceConfirmed && ((longGap && (!backFacing || !nearReference)) || ambiguous || tooFar)) {
+      if (!surfaceConfirmed && !depthRealigned && ((longGap && (!backFacing || !nearReference)) || ambiguous || tooFar)) {
         this.recovery = null; this.diagnostics.state = 'reorient'; return null;
       }
       if (!this.recovery || time-this.recovery.time > 200 || this.recovery.rotation.angleTo(rotation) > 0.3) {
         this.recovery = { rotation: rotation.clone(), started: time, time, count: 1 };
       } else { this.recovery.rotation.copy(rotation); this.recovery.time = time; this.recovery.count++; }
       this.diagnostics.state = longGap ? 'reorient' : 'reacquiring';
-      if (!surfaceConfirmed && (this.recovery.count < 3 || time-this.recovery.started < (longGap ? 250 : 60))) return null;
+      if (!surfaceConfirmed && !depthRealigned && (this.recovery.count < 3 || time-this.recovery.started < (longGap ? 250 : 60))) return null;
     }
     // One calibrated palm width drives both size and wrist radius. Learned bone
     // lengths can change when fingers overlap; they must not resize the wrist.
@@ -235,12 +278,13 @@ export class WristPoseTracker {
       this.rotationVelocity.lerp(vector, cutoffAlpha(dt, 4));
     } else this.rotationVelocity.set(0, 0, 0);
     this.lastRotationGood = time; this.previousRotation = rotation.clone(); this.recovery = null;
+    this.depthBlocked = false;
   }
   update(next, time) {
     if (!Number.isFinite(time) || time <= this.lastInput) return false;
     const frameDt = clamp((time-this.lastInput)/1000, 0.001, 0.1);
     this.lastInput = time;
-    if (!next) { this.branchEvidence = null; this.surfaceEvidence = null; this.diagnostics = { state: 'missing', quality: 0, progress: this.orientationSign ? 1 : 0 }; return false; }
+    if (!next) { this.branchEvidence = null; this.surfaceEvidence = null; this.depthEvidence = null; this.diagnostics = { state: 'missing', quality: 0, progress: this.orientationSign ? 1 : 0 }; return false; }
     next = { ...next };
     const oriented = this.orientedRotation(next, time);
     // A failed rotation fit also makes its inferred scale/anchor untrustworthy.
@@ -277,7 +321,8 @@ export class WristPoseTracker {
       this.motionVelocity.set(0, 0, 0);
     }
     this.pendingPose = null;
-    if (oriented && this.previousRotation && this.previousRotation.angleTo(oriented) > 1.3+dt*4 && (!this.pendingRotation || this.pendingRotation.angleTo(oriented) > 0.45)) {
+    const depthReset = this.diagnostics.depthRealigned && this.depthBlocked;
+    if (!depthReset && oriented && this.previousRotation && this.previousRotation.angleTo(oriented) > 1.3+dt*4 && (!this.pendingRotation || this.pendingRotation.angleTo(oriented) > 0.45)) {
       this.pendingRotation = oriented.clone(); this.diagnostics.state = 'outlier'; return false;
     }
     this.pendingRotation = null;
@@ -305,11 +350,12 @@ export class WristPoseTracker {
       const filtered = this.pose.rotation.clone().slerp(oriented, cutoffAlpha(dt, 1.6 + this.angularSpeed * 0.65));
       const rateLimit = Math.min(6.5, 3 + this.rotationVelocity.length()*1.2);
       this.pose.rotation.rotateTowards(filtered, rateLimit*frameDt);
-      if (time-this.lastRotationGood > 220) this.pose.rotation.copy(oriented);
+      if (time-this.lastRotationGood > 220 || depthReset) this.pose.rotation.copy(oriented);
+      if (depthReset) { this.previousRotation = null; this.rotationVelocity.set(0,0,0); this.angularSpeed = 0; }
       this.acceptRotation(oriented, time);
     }
     this.previous.copy(next.position); this.lastGood = time;
     return true;
   }
-  sample(time) { return this.pose && time - this.lastGood <= 220 && (!this.orientationSign || time-this.lastRotationGood <= 220) ? this.pose : null; }
+  sample(time) { return !this.depthBlocked && this.pose && time - this.lastGood <= 220 && (!this.orientationSign || time-this.lastRotationGood <= 220) ? this.pose : null; }
 }
