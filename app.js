@@ -12,7 +12,7 @@ import { makeSampleWatch, disposeModel, inspectGLB, normalizeImportedWatch } fro
 import { WristRig, wristDimensions } from './wrist-rig.js?v=71';
 import { DiagnosticRecorder } from './diagnostic-recorder.js?v=711';
 
-import { FIT_CONTROLS, FitSettings, defaultFit } from './fit-settings.js?v=7';
+import { FIT_CONTROLS, FitSettings, defaultFit } from './fit-settings.js?v=717';
 
 const $ = id => document.getElementById(id);
 const video = $('camera'), stage = $('stage'), status = $('status'), errorBox = $('error');
@@ -96,7 +96,7 @@ function saveFit() {
   $('fit-saved').textContent = saved ? '이 브라우저에 자동 저장됐어요.' : '이 브라우저에서는 설정 저장을 사용할 수 없어요.';
 }
 function resetFit() {
-  applyFit(defaults); $('wrist-guide').checked = false; saveFit();
+  applyFit(defaultFit(engine, modelKey)); $('wrist-guide').checked = false; saveFit();
 }
 function updateMode(next) {
   diagnosticEvent('tracking-reset', { reason: 'camera-mode', nextMode: next });
@@ -320,7 +320,7 @@ function replaceModel(model) {
   if (watch) { adjustment.remove(watch); disposeModel(watch); }
   watch = model; adjustment.add(watch);
 }
-async function importModel(file) {
+async function importModel(file, profileKey) {
   if (!file) return;
   const id = ++modelOperation;
   $('model-status').textContent = '시계를 불러오고 있습니다…';
@@ -342,7 +342,7 @@ async function importModel(file) {
     if (id !== modelOperation) { disposeModel(loaded); loaded = null; return; }
     const normalized = normalizeImportedWatch(loaded);
     replaceModel(normalized); loaded = null;
-    modelKey = 'glb:' + file.name + ':' + file.size; applyFit(fitSettings.load(engine, modelKey));
+    modelKey = profileKey || 'glb:' + file.name + ':' + file.size; applyFit(fitSettings.load(engine, modelKey));
     $('model-name').textContent = file.name.replace(/\.glb$/i, '');
     $('model-caption').textContent = `${(file.size / 1024 / 1024).toFixed(1)} MB · 내 시계 모델`;
     $('model-status').textContent = normalized.userData.caseAnchored ? '케이스 중심·뒷면 기준으로 불러왔습니다. 스트랩은 모델의 고정된 형태이며 손목에 맞게 자동으로 휘어지지는 않습니다.' : '불러왔습니다. 손목 모형으로 위치를 맞출 수 있어요. GLB의 스트랩 형태는 그대로 유지됩니다.';
@@ -361,7 +361,7 @@ async function loadDatejust() {
     if (!response.ok) throw new Error('모델을 내려받지 못했습니다. 잠시 뒤 다시 눌러 주세요.');
     const blob = await response.blob();
     if (id !== modelOperation) return;
-    await importModel(new File([blob], 'Rolex-Datejust-AR.glb', { type: 'model/gltf-binary' }));
+    await importModel(new File([blob], 'Rolex-Datejust-AR.glb', { type: 'model/gltf-binary' }), 'datejust');
   } catch (error) { if (id === modelOperation) $('model-status').textContent = error.message || '모델을 불러오지 못했습니다.'; }
   finally { if (button) button.disabled = false; }
 }
@@ -370,14 +370,16 @@ try {
   renderer = new THREE.WebGLRenderer({ canvas: $('scene'), alpha: true, antialias: true, powerPreference: 'high-performance' });
   renderer.setPixelRatio(Math.min(devicePixelRatio, 1.75));
   renderer.setClearColor(0x000000, 0);
-  renderer.toneMapping = THREE.ACESFilmicToneMapping; renderer.toneMappingExposure = 1.35;
+  renderer.toneMapping = THREE.ACESFilmicToneMapping; renderer.toneMappingExposure = 0.85;
   scene = new THREE.Scene();
   camera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.1, 10000); camera.position.z = 2000;
-  scene.add(new THREE.HemisphereLight(0xe5faff, 0x19212e, 2));
-  const key = new THREE.DirectionalLight(0xffffff, 4); key.position.set(-200, 500, 800); scene.add(key);
-  const fill = new THREE.DirectionalLight(0xa2e8e2, 2); fill.position.set(400, -200, 500); scene.add(fill);
+  // Leave headroom for polished metal reflections in both preview and AR.
+  scene.add(new THREE.HemisphereLight(0xf4f7ff, 0x19212e, 0.5));
+  const key = new THREE.DirectionalLight(0xffffff, 1.2); key.position.set(-200, 500, 800); scene.add(key);
+  const fill = new THREE.DirectionalLight(0xf1f5ff, 0.4); fill.position.set(400, -200, 500); scene.add(fill);
   const pmrem = new THREE.PMREMGenerator(renderer), room = new RoomEnvironment();
   const environment = pmrem.fromScene(room, 0.04); scene.environment = environment.texture; pmrem.dispose(); room.dispose();
+  scene.environmentIntensity = 0.65;
   anchor = new WristRig(); adjustment = anchor.caseMount; occluder = anchor.occluder;
   scene.add(anchor); replaceModel(makeSampleWatch()); updateFit();
   new ResizeObserver(() => {
@@ -430,7 +432,7 @@ $('save-diagnostics').addEventListener('click',()=>{
   if(!diagnosticRecorder.frames.length && !diagnosticRecorder.renders.length)return;
   const time = performance.now(); diagnosticRecorder.stop(time, 'save');
   updateDiagnosticUi(time, true);
-  const blob=new Blob([JSON.stringify(diagnosticRecorder.export(time, {version:'0.7.16',engine,timeOrigin:performance.timeOrigin}))],{type:'application/json'});
+  const blob=new Blob([JSON.stringify(diagnosticRecorder.export(time, {version:'0.7.17',engine,timeOrigin:performance.timeOrigin}))],{type:'application/json'});
   const url=URL.createObjectURL(blob), link=document.createElement('a');link.href=url;link.download='wrist-diagnostics.json';link.click();setTimeout(()=>URL.revokeObjectURL(url),1000);
 });
 $('start').addEventListener('click', () => mode === 'idle' ? startCamera() : stopCamera());

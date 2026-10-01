@@ -7,3 +7,4 @@
 
 
 .model-preset{width:100%;background:#18332e;border-color:#49776b}.model-preset:hover{background:#224b41}
+.quick-fit{margin-top:14px;padding:12px 14px;border:1px solid var(--line);border-radius:12px;background:#172127}.quick-fit .slider-label{margin:0 0 6px}.quick-fit .small{margin-top:2px;font-size:.75rem}
