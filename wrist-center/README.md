@@ -14,4 +14,4 @@ Input: RGB float32 NCHW `[1,3,192,192]`, integer-box downsampling and letterboxi
 
 ONNX Runtime Web 1.23.0 uses the included MIT license. Inference runs locally in a dedicated single-threaded WASM worker. Camera frames remain in the browser. An explicit diagnostic photo action creates a local download only.
 
-This page is separate from the stable hand-based application. Missing or older-than-350ms observations hide the watch; a new accepted center reattaches without hand calibration. Size and orientation settings use `viver-wrist-center-watch-v1` storage.
+This page is separate from the stable hand-based application. Experiment 04 requires two nearby observations with score >= 0.55 to attach. During a lock, nearby observations with score >= 0.40 may continue for at most 650ms since strong evidence. Missing or rejected observations hold the last position for no more than 220ms from its capture time; no velocity is extrapolated. Large position jumps require reconfirmation after the old lock expires. These display-continuity rules do not improve the model itself or estimate wrist rotation. Size and orientation settings use `viver-wrist-center-watch-v1` storage.
