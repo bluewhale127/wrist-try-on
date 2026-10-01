@@ -21,5 +21,6 @@ for (const name of ['index.html', 'app.js', 'diagnostic-recorder.js', 'fit-setti
 }
 // Only active runtime assets are published; retired experiments stay out of the site.
 for (const name of ['three', 'vision']) await cp(path.join(root, 'vendor', name), path.join(output, 'vendor', name), { recursive: true });
+await cp(path.join(root, 'datejust-ar.glb'), path.join(output, 'datejust-ar.glb'));
 await writeFile(path.join(output, '.nojekyll'), '');
 console.log('Static site built in dist/.');

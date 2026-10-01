@@ -5,3 +5,5 @@
 @media(prefers-reduced-motion:reduce){*{scroll-behavior:auto!important}}
 #tracking-debug[hidden]{display:none}#tracking-debug{z-index:1}.stage-top,.stage-bottom{z-index:2}#debug-info{font-variant-numeric:tabular-nums;white-space:pre-line}
 
+
+.model-preset{width:100%;background:#18332e;border-color:#49776b}.model-preset:hover{background:#224b41}

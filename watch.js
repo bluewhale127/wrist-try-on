@@ -59,6 +59,26 @@ export function disposeModel(root) {
   for (const g of geometries) g.dispose();
 }
 
+export function normalizeImportedWatch(loaded) {
+  const bounds = new THREE.Box3().setFromObject(loaded);
+  const size = bounds.getSize(new THREE.Vector3()), center = bounds.getCenter(new THREE.Vector3());
+  if (bounds.isEmpty() || size.x < 1e-8 || !Number.isFinite(size.length())) throw new Error('크기를 확인할 수 없는 모델입니다. 메시가 포함되어 있는지 확인해 주세요.');
+  const reference = loaded.userData?.wristAR;
+  const anchored = reference?.version === 1 && Number.isFinite(reference.caseWidth) &&
+    reference.caseWidth >= size.x * .05 && reference.caseWidth <= size.x * 2 &&
+    Array.isArray(reference.contact) && reference.contact.length === 3 && reference.contact.every(Number.isFinite) &&
+    bounds.clone().expandByScalar(size.length() * .1).containsPoint(new THREE.Vector3().fromArray(reference.contact));
+  // Ordinary GLBs retain the previous X/Y centring and authored Z origin.
+  // Prepared watch assets explicitly identify the case width and back contact;
+  // a crown or bracelet must not move the dial away from the wrist anchor.
+  const contact = anchored ? new THREE.Vector3().fromArray(reference.contact) : center.setZ(0);
+  loaded.position.sub(contact);
+  const normalized = new THREE.Group();
+  normalized.scale.setScalar(1 / (anchored ? reference.caseWidth : size.x));
+  normalized.add(loaded); normalized.userData.caseAnchored = !!anchored;
+  return normalized;
+}
+
 export function inspectGLB(buffer) {
   const data = new DataView(buffer);
   if (buffer.byteLength < 24 || data.getUint32(0, true) !== 0x46546c67 || data.getUint32(4, true) !== 2 || data.getUint32(8, true) !== buffer.byteLength) throw new Error('glTF 2.0 형식의 GLB 파일을 선택해 주세요.');
