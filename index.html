@@ -11,7 +11,7 @@
 </head>
 <body>
   <main class="app">
-    <header class="header"><div><span class="eyebrow">WRIST / STUDIO</span><h1>손목 위의 시계</h1></div><span class="badge">착용 테스트 · 0.7.17</span></header>
+    <header class="header"><div><span class="eyebrow">WRIST / STUDIO</span><h1>손목 위의 시계</h1></div><span class="badge">착용 테스트 · 0.7.18</span></header>
     <div class="workspace">
       <section class="viewer" aria-label="시계 착용 화면">
         <div id="stage" class="stage">
@@ -51,8 +51,9 @@
           <button id="align-dial" class="text-button" type="button">6·12시 방향 다시 맞추기</button>
           <p class="small">시계 방향과 기울기를 기본값으로 맞춥니다. 크기·착용 위치·손목 너비는 유지합니다.</p>
           <label class="check-label"><input id="occlusion" type="checkbox" checked>손목 뒤 스트랩 가리기 <span>근사 처리</span></label>
+          <div id="glb-occlusion" hidden><label class="slider-label" for="occlusion-margin">GLB 옆면 가림 범위 <output id="occlusion-margin-output">110%</output></label><input id="occlusion-margin" type="range" min="1" max="1.25" step="0.01" value="1.1" aria-describedby="occlusion-help"><p id="occlusion-help" class="small">뒤쪽 금속이 피부 위에 보이면 조금 높여 주세요. 앞쪽 스트랩까지 지워지면 낮춰 주세요. 100%는 기존 가림 모형입니다. 카메라 착용 화면에 적용됩니다.</p></div>
           <details id="wrist-fit"><summary>손목에 감기도록 맞추기</summary><p class="small">손목을 타원형 원기둥으로 추정합니다. 모형을 켜고 손등에서 너비, 옆면에서 두께를 맞춰 주세요. 임시 시계의 스트랩이 함께 감깁니다.</p>
-            <label class="check-label"><input id="wrist-guide" type="checkbox">손목 모형 보기</label>
+            <label class="check-label"><input id="wrist-guide" type="checkbox">손목 가림 모형 보기</label>
             <label class="slider-label" for="wrist-width">손목 너비 <output id="wrist-width-output">100%</output></label><input id="wrist-width" type="range" min="0.65" max="2" step="0.01" value="1">
             <label class="slider-label" for="wrist-depth">손목 두께 <output id="wrist-depth-output">100%</output></label><input id="wrist-depth" type="range" min="0.6" max="2" step="0.01" value="1">
             <p class="small">실제 치수 측정은 아닙니다. 불러온 GLB의 스트랩은 자동으로 변형하지 않습니다.</p>
@@ -62,8 +63,8 @@
         <p class="note">크기는 시각적으로 추정합니다. 실제 치수 측정용은 아니며, 손목을 크게 돌리면 정렬이 흐트러질 수 있습니다.</p>
       </aside>
     </div>
-    <footer>Wrist Studio 0.7.17 · Android Chrome 기준 · 영상은 기기 안에서 처리됩니다</footer>
+    <footer>Wrist Studio 0.7.18 · Android Chrome 기준 · 영상은 기기 안에서 처리됩니다</footer>
   </main>
-  <script type="module" src="./app.js?v=717"></script>
+  <script type="module" src="./app.js?v=718"></script>
 </body>
 </html>
