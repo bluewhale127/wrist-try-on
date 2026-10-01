@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {Vector3,Quaternion} from './vendor/three/three.module.js';
 import {WristPoseTracker,estimateWristPose} from './pose.js';
 import {WristRig,wristDimensions} from './wrist-rig.js';
-import {frameLabel,wristCrop,CaptureGate,CollectionGate,CaptureTrace,reviewLabel,TEACHER_FIT} from './teacher-capture.mjs';
+import {frameLabel,wristCrop,CaptureGate,CollectionGate,CaptureTrace,reviewLabel,reviewCrop,guideFromDisplayPoint,TEACHER_FIT} from './teacher-capture.mjs';
 import {crc32,makeZip,sessionArchive} from './teacher-store.mjs';
 function example(){
   const points=Array.from({length:21},()=>({x:.5,y:.2,z:0}));
@@ -75,12 +75,49 @@ test('ZIP has correct CRC, UTF-8 filenames and image-label file mapping',async()
 
 test('side scenes never become axis labels, even when teacher accepts; loss remains recordable',()=>{
   const g=new CollectionGate(),r=frameLabel(example());
-  assert.equal(g.consider({reason:'calibration'},{calibrated:false,scene:'side',time:0}),null);
-  assert.deepEqual(g.consider(r,{calibrated:true,scene:'side',time:100}),{kind:'review',reason:'side-review'});
-  assert.equal(g.consider(r,{calibrated:true,scene:'normal',time:200}),null);
-  assert.deepEqual(g.consider({reason:'tracking'},{calibrated:false,scene:'normal',time:500}),{kind:'review',reason:'tracking'});
-  assert.deepEqual(g.consider(r,{calibrated:true,scene:'normal',time:900}),{kind:'label'});
+  assert.equal(g.consider({reason:'calibration'},{calibrated:false,scene:'normal',time:0}),null);
+  assert.deepEqual(g.consider({reason:'calibration'},{calibrated:false,scene:'side',time:0}),{kind:'review',reason:'side-review'});
+  assert.equal(g.consider(r,{calibrated:false,scene:'side',time:100}),null);
+  assert.deepEqual(g.consider(r,{calibrated:true,scene:'side',time:400}),{kind:'review',reason:'side-review'});
+  assert.equal(g.consider(r,{calibrated:true,scene:'normal',time:500}),null);
+  assert.deepEqual(g.consider({reason:'tracking'},{calibrated:false,scene:'normal',time:800}),{kind:'review',reason:'tracking'});
+  assert.deepEqual(g.consider(r,{calibrated:true,scene:'normal',time:1200}),{kind:'label'});
   g.reset();assert.equal(g.consider({reason:'tracking'},{calibrated:false,scene:'normal',time:1500}),null);
+});
+
+test('review crop needs no hand or axis and remains inside portrait/landscape images',()=>{
+  for(const [w,h] of [[405,720],[720,405],[48,48]])for(const x of [-1,0,.5,1,2])for(const y of [0,.5,1]){
+    const crop=reviewCrop(w,h,{x,y,fraction:.8});
+    assert.ok(crop.x>=0&&crop.y>=0&&crop.x+crop.width<=w&&crop.y+crop.height<=h);
+    assert.equal(crop.width,crop.height);assert.equal(crop.centerNormalized,null);assert.equal(crop.reviewRequired,true);
+  }
+  assert.equal(reviewCrop(0,720),null);
+  assert.equal(reviewCrop(405,720,{fraction:Infinity}).width,324);
+});
+
+test('guide taps account for letterboxing and selfie reflection without changing saved pixels',()=>{
+  const input={stageWidth:600,stageHeight:720,imageWidth:405,imageHeight:720,x:197.5,y:360};
+  const rear=guideFromDisplayPoint(input),front=guideFromDisplayPoint({...input,mirrored:true});
+  assert.equal(rear.x,100/405);assert.equal(front.x,305/405);assert.equal(rear.y,.5);
+  assert.equal(guideFromDisplayPoint({...input,x:10}),null);
+  assert.equal(guideFromDisplayPoint({...input,stageWidth:0}),null);
+});
+
+test('side archive exports actual review crops and empty partial-point annotation templates',async()=>{
+  const crop=reviewCrop(405,720,{x:.3,y:.5});
+  const zip=await sessionArchive({id:'side-session',version:'teacher-03'},[{index:7,image:new Blob(['source']),cropImage:new Blob(['crop']),
+    label:{kind:'review',scene:'side',imageSize:[405,720],crop,frameTimeMs:123,axes:null,center2d:null}}]);
+  const bytes=new Uint8Array(await zip.arrayBuffer()),v=new DataView(bytes.buffer),files={};
+  for(let offset=0;v.getUint32(offset,true)===0x04034b50;){
+    const size=v.getUint32(offset+18,true),n=v.getUint16(offset+26,true),extra=v.getUint16(offset+28,true),start=offset+30+n+extra;
+    const name=new TextDecoder().decode(bytes.slice(offset+30,offset+30+n));files[name]=new TextDecoder().decode(bytes.slice(start,start+size));offset=start+size;
+  }
+  const m=JSON.parse(files['manifest.json']),a=JSON.parse(files['annotation-template.json']);
+  assert.equal(m.frames.length,0);assert.equal(m.reviewFrames[0].cropImage,'review-crops/00007.jpg');
+  assert.equal(files[m.reviewFrames[0].cropImage],'crop');assert.equal(a.splitGroup,'side-session');
+  assert.deepEqual(a.items[0].crop,crop);assert.equal(a.items[0].recordIndex,7);
+  for(const t of Object.values(a.items[0].targets)){assert.equal(t.imagePoint,null);assert.equal(t.supervisionMask,0);assert.equal(t.state,'unreviewed');}
+  assert.equal(a.items[0].threeDRotation,null);assert.equal(a.items[0].approvedForTraining,false);
 });
 test('review evidence cannot populate targets and is cloned at image timestamp',()=>{
   const evidence={teacherLandmarks:[{x:.1}],selectedRotation:[0,0,0,1]};

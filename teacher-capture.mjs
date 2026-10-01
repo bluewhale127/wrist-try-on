@@ -2,7 +2,7 @@ import {Vector3} from './vendor/three/three.module.js';
 import {teacherAxesLabel} from './watch-teacher-axes.mjs';
 import {defaultFit} from './fit-settings.js';
 
-export const CAPTURE_VERSION='teacher-02';
+export const CAPTURE_VERSION='teacher-03';
 export const TEACHER_FIT=Object.freeze(defaultFit('hand','datejust'));
 export const LIMITS={frames:300,bytes:80*1024*1024,totalBytes:200*1024*1024,intervalMs:334};
 
@@ -86,12 +86,35 @@ export class CollectionGate {
   reset(){this.hasReference=false;this.lastSave=-Infinity;}
   consider(candidate,{calibrated,scene,time}){
     this.hasReference ||= calibrated;
-    if(!this.hasReference||time-this.lastSave<LIMITS.intervalMs)return null;
+    if((scene!=='side'&&!this.hasReference)||time-this.lastSave<LIMITS.intervalMs)return null;
     if(scene!=='side'&&!candidate.label&&candidate.reason==='cadence')return null;
     this.lastSave=time;
     return scene==='side'?{kind:'review',reason:'side-review'}:
       candidate.label?{kind:'label'}:{kind:'review',reason:candidate.reason||'tracking'};
   }
+}
+
+// A framing aid, not a detected wrist box or a target center. It works even
+// with no landmarks and must be frozen alongside the inference source image.
+export function reviewCrop(width,height,guide={}){
+  if(!Number.isInteger(width)||!Number.isInteger(height)||Math.min(width,height)<48)return null;
+  const clamp=(v,a,b)=>Math.max(a,Math.min(b,v));
+  const fraction=Number.isFinite(guide.fraction)?clamp(guide.fraction,.35,1):.8;
+  const side=Math.min(Math.min(width,height),Math.max(48,Math.round(Math.min(width,height)*fraction)));
+  const cx=(Number.isFinite(guide.x)?clamp(guide.x,0,1):.5)*width;
+  const cy=(Number.isFinite(guide.y)?clamp(guide.y,0,1):.55)*height;
+  return {x:clamp(Math.round(cx-side/2),0,width-side),y:clamp(Math.round(cy-side/2),0,height-side),width:side,height:side,
+    outputSize:224,method:'user-positioned framing guide; not a detected wrist or target',reviewRequired:true,centerNormalized:null};
+}
+
+export function guideFromDisplayPoint({x,y,stageWidth,stageHeight,imageWidth,imageHeight,mirrored=false}){
+  if(![x,y,stageWidth,stageHeight,imageWidth,imageHeight].every(Number.isFinite)||Math.min(stageWidth,stageHeight,imageWidth,imageHeight)<=0)return null;
+  const scale=Math.min(stageWidth/imageWidth,stageHeight/imageHeight);
+  let ix=(x-stageWidth/2)/scale+imageWidth/2;
+  const iy=(y-stageHeight/2)/scale+imageHeight/2;
+  if(ix<0||iy<0||ix>imageWidth||iy>imageHeight)return null;
+  if(mirrored)ix=imageWidth-ix;
+  return {x:ix/imageWidth,y:iy/imageHeight};
 }
 
 export class CaptureTrace {

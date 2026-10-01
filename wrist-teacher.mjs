@@ -9,8 +9,8 @@ import {estimateWristPose,WristPoseTracker,watchRotationDegrees} from './pose.js
 import {calibrationPrompt} from './initial-calibration.js?v=78';
 import {WristRig,wristDimensions} from './wrist-rig.js?v=719';
 import {normalizeImportedWatch,inspectGLB} from './watch.js?v=716';
-import {frameLabel,wristCrop,CaptureGate,CollectionGate,CaptureTrace,reviewLabel,CAPTURE_VERSION,TEACHER_FIT} from './teacher-capture.mjs?v=2';
-import {openTeacherStore,sessionArchive} from './teacher-store.mjs?v=2';
+import {frameLabel,wristCrop,CaptureGate,CollectionGate,CaptureTrace,reviewLabel,reviewCrop,guideFromDisplayPoint,CAPTURE_VERSION,TEACHER_FIT} from './teacher-capture.mjs?v=3';
+import {openTeacherStore,sessionArchive} from './teacher-store.mjs?v=3';
 const $=id=>document.getElementById(id),video=$('video'),stage=$('stage');
 const capture=document.createElement('canvas'),cropCanvas=document.createElement('canvas'),captureCtx=capture.getContext('2d',{alpha:false});
 cropCanvas.width=cropCanvas.height=224;const cropCtx=cropCanvas.getContext('2d',{alpha:false}),marks=$('marks'),ctx=marks.getContext('2d');
@@ -20,16 +20,18 @@ const collection=new CollectionGate();let trace=new CaptureTrace(),ending=false;
 let store,stream,session,ready=false,opening=false,epoch=0,task=null,lastFrame=-1,lastSent=-Infinity,lastPoseTime=-Infinity,lastLabel=null,lastReason='idle',savedTime=-Infinity,calibrationId=0;
 let renderer,scene,camera,rig,model,exporting=false,downloadUrl=null,view={width:1,height:1,videoWidth:1,videoHeight:1};
 let latestDiagnostic={},rejected={},inferMs=0;
+let captureGuide={x:.5,y:.55,fraction:.8};
 const status=text=>{$('status').textContent=text;};
 const jpeg=canvas=>new Promise((resolve,reject)=>canvas.toBlob(blob=>blob?resolve(blob):reject(Error('이미지 저장 변환 실패')),'image/jpeg',.88));
 function buttons(){
   $('start').disabled=!ready||opening||ending||!!stream||!!task||exporting;$('front').disabled=opening||ending||!!stream||!!task||exporting;
-  $('stop').disabled=!stream&&!opening;$('recalibrate').disabled=!stream||!!task;
+  $('stop').disabled=!stream&&!opening;$('recalibrate').disabled=!stream||!!task||$('capture-scene').value==='side';
   $('capture-scene').disabled=opening||ending||exporting;
+  $('guide-size').disabled=opening||ending||exporting;$('guide-reset').disabled=opening||ending||exporting;
   $('export').disabled=!$('sessions').value||!!stream||opening||ending||!!task||exporting;
   $('delete').disabled=$('export').disabled;
 }
-function counts(){if(session)$('counts').textContent=`축 후보 ${session.labeled??session.count}장 · 검토용 ${session.review||0}장 · ${(session.bytes/1048576).toFixed(1)}MB`;}
+function counts(){if(session)$('counts').textContent=`축 후보 ${session.labeled??session.count}장 · 검토용 ${session.review||0}장 · 확대 이미지 ${session.crops}장 · ${(session.bytes/1048576).toFixed(1)}MB`;}
 async function persistSummary(){if(session)await store.updateSummary(session.id,{...trace.summary(),endedAt:stream?null:new Date().toISOString()});}
 
 async function refreshSessions(prefer=$('sessions').value){
@@ -39,12 +41,26 @@ async function refreshSessions(prefer=$('sessions').value){
   if(rows.some(s=>s.id===prefer))$('sessions').value=prefer;buttons();
 }
 $('sessions').onchange=buttons;
-$('capture-scene').onchange=()=>{
-  gate.reset();lastLabel=null;
-  $('scene-guide').textContent=$('capture-scene').value==='side'?
-    '손등으로 처음 맞춘 뒤, 팔을 일자로 유지하고 손등 → 옆면 → 손바닥 → 옆면 → 손등 순서로 천천히 왕복해 주세요. 옆면에서 1~2초 멈추고 가로·세로 자세를 각각 촬영해 주세요. 이 모드에서는 시계와 축을 숨기고 검토용 이미지만 저장해요.':
+function sceneChanged(){
+  gate.reset();lastLabel=null;const side=$('capture-scene').value==='side';
+  $('guide-controls').hidden=!side;
+  $('scene-guide').textContent=side?
+    '손등 보정 없이 바로 저장해요. 손목을 점선 안에 맞추고 화면을 눌러 영역을 옮겨 주세요. 옆면에서 잠깐 멈추며 가로·세로로 천천히 왕복해 주세요. 시계·축은 표시하지 않으며, 점선은 촬영 영역일 뿐 추적 결과가 아니에요.':
     '손등과 손가락 전체를 보여 처음 맞춰 주세요. 이후 천천히 움직이면 축 후보와 추적 실패 장면을 구분해 저장해요.';
-};
+  buttons();
+}
+$('capture-scene').onchange=sceneChanged;
+$('guide-size').oninput=()=>{captureGuide.fraction=Number($('guide-size').value);};
+$('guide-reset').onclick=()=>{captureGuide={x:.5,y:.55,fraction:.8};$('guide-size').value='.8';};
+stage.addEventListener('pointerdown',event=>{
+  if(!stream||opening||$('capture-scene').value!=='side')return;
+  const rect=stage.getBoundingClientRect();
+  const position=guideFromDisplayPoint({x:event.clientX-rect.left,y:event.clientY-rect.top,
+    stageWidth:rect.width,stageHeight:rect.height,imageWidth:view.videoWidth,imageHeight:view.videoHeight,mirrored:stage.classList.contains('mirror')});
+  if(position)captureGuide={...captureGuide,...position};
+});
+sceneChanged();
+
 function reset(){tracker.reset();target.reset();rearAxis.reset();gate.reset();displayPose=null;lastLabel=null;lastPoseTime=-Infinity;lastFrame=-1;calibrationId++;if(rig)rig.visible=false;}
 function halt(){epoch++;opening=false;stream?.getTracks().forEach(t=>t.stop());stream=null;video.pause();video.srcObject=null;reset();buttons();}
 async function end(){
@@ -68,7 +84,7 @@ async function start(){
     const created=await store.create({facing:actualFacing,sourceResolution:[video.videoWidth,video.videoHeight],teacher:'legacy-hand-0.7.19-core',
       captureVersion:CAPTURE_VERSION,displayMirrored:actualFacing==='user',storedImagesMirrored:false,
       rearPalmAxis:actualFacing!=='user',opticalFlow:false,settings:TEACHER_FIT,studentTrainingRun:false,model:'datejust-ar.glb'});
-    if(token!==epoch)return;session=created;rejected={};trace=new CaptureTrace();collection.reset();opening=false;counts();await refreshSessions(session.id);status('손등과 손가락 전체를 2초 정도 가만히 보여 주세요.');
+    if(token!==epoch)return;session=created;rejected={};trace=new CaptureTrace();collection.reset();opening=false;counts();await refreshSessions(session.id);status($('capture-scene').value==='side'?'손목을 점선 안에 맞춰 주세요. 보정 없이 저장을 시작해요.':'손등과 손가락 전체를 2초 정도 가만히 보여 주세요.');
     // This is only a request to reduce eviction risk; a ZIP backup is still needed.
     navigator.storage?.persist?.().catch(()=>{});
   }catch(e){if(token===epoch){halt();showError(e);status('카메라 또는 저장소를 열지 못했어요.');}}
@@ -82,7 +98,8 @@ async function processFrame(token){
     const width=Math.round(video.videoWidth*ratio),height=Math.round(video.videoHeight*ratio);
     if(capture.width!==width||capture.height!==height){capture.width=width;capture.height=height;reset();}
     captureCtx.drawImage(video,0,0,width,height);lastFrame=video.currentTime;lastSent=time;
-    const mediaTime=video.currentTime,captureScene=$('capture-scene').value;
+    const mediaTime=video.currentTime,captureScene=$('capture-scene').value,frozenGuide=structuredClone(captureGuide);
+    const sideCrop=captureScene==='side'?reviewCrop(width,height,frozenGuide):null;
     const packet=await detector.detect(capture,time);if(token!==epoch)return;
     inferMs=performance.now()-time;view.videoWidth=width;view.videoHeight=height;
     const rawView={width,height,videoWidth:width,videoHeight:height};
@@ -95,12 +112,12 @@ async function processFrame(token){
     const result=frameLabel({pose:displayPose,basePose:tracker.pose,rearAxis:session.facing!=='user'?rearAxis.diagnostics:null,raw,selectedRotation:tracker.previousRotation,watchSign:tracker.watchOrientationSign,
       diagnostic:tracker.diagnostics,calibrated,accepted,time,latency:inferMs,width,height,landmarks});
     const candidate=gate.consider(captureScene==='side'?{reason:'side-review'}:result,time);lastReason=candidate.reason||'eligible';
-    latestDiagnostic={calibrated,accepted,reason:lastReason,teacherReason:result.reason||'eligible',backend:detector.backend,latencyMs:Math.round(inferMs),tracking:tracker.diagnostics};
+    latestDiagnostic={calibrated,accepted,reason:lastReason,teacherReason:result.reason||'eligible',backend:detector.backend,latencyMs:Math.round(inferMs),tracking:tracker.diagnostics,rawRotationQuality:raw?.rotationQuality??null,handDetected:!!landmarks};
     trace.add({time,scene:captureScene,...latestDiagnostic});rejected=trace.rejected;
     if(result.label&&captureScene!=='side'){lastPoseTime=time;lastLabel=result.label;}else lastLabel=null;
     const decision=collection.consider(candidate,{calibrated,scene:captureScene,time});
     if(!decision){
-      status(captureScene==='side'&&collection.hasReference?'옆면 검토 촬영 중 · 시계가 숨겨져도 천천히 왕복해 주세요.':
+      status(captureScene==='side'?`옆면 저장 중 · ${session.review||0}장 · 손 관절 ${landmarks?'검출':'없음'} · 점선 안에 손목을 맞춰 주세요.`:
         !calibrated?calibrationPrompt(tracker.diagnostics):'천천히 손목을 돌려 주세요. 이미지와 진단을 저장 중이에요.');return;
     }
     const metadata={calibrationId,capturedAt:new Date(performance.timeOrigin+time).toISOString(),mediaTimeSeconds:mediaTime,
@@ -110,15 +127,17 @@ async function processFrame(token){
         calibrated,accepted,teacherReason:result.reason||'eligible',teacherLandmarks:landmarks,teacherWorldLandmarks:world||null,
         rawRotation:raw?.rotation?.toArray()||null,selectedRotation:tracker.previousRotation?.toArray()||null,
         displayedRotation:displayPose?.rotation?.toArray()||null,displayedPosition:displayPose?.position?.toArray()||null,
-        diagnostic:tracker.diagnostics,rearAxis:rearAxis.diagnostics,latencyMs:inferMs}}),...metadata};
-    label.crop=decision.kind==='label'?wristCrop(label,landmarks):null;
+        diagnostic:tracker.diagnostics,rearAxis:rearAxis.diagnostics,latencyMs:inferMs,
+        rawRotationQuality:raw?.rotationQuality??null,thumbUsed:raw?.thumbUsed??null,watchOrientationSign:tracker.watchOrientationSign,
+        captureGuide:captureScene==='side'?frozenGuide:null}}),...metadata};
+    label.crop=decision.kind==='label'?wristCrop(label,landmarks):sideCrop;
     const image=await jpeg(capture);let cropImage=null;
     if(label.crop){const c=label.crop;cropCtx.drawImage(capture,c.x,c.y,c.width,c.height,0,0,224,224);cropImage=await jpeg(cropCanvas);}
     if(token!==epoch)return;
     session=await store.save(session.id,{label,image,cropImage});counts();savedTime=time;
     await persistSummary();
     status('축 후보 저장 중 · 천천히 손목을 돌려 주세요.');
-    if(decision.kind==='review')status('검토용 이미지 저장 중 · 축이 불확실해도 촬영은 계속돼요.');
+    if(decision.kind==='review')status(captureScene==='side'?`옆면 저장 ${session.review}장 · 원본 + 확대 이미지 · 손 관절 ${landmarks?'검출':'없음'}`:'검토용 이미지 저장 중 · 축이 불확실해도 촬영은 계속돼요.');
     if(session.count>=300){halt();await persistSummary();await refreshSessions(session.id);status('300장을 저장했어요. ZIP을 보내 주세요.');}
 
   }catch(e){if(token===epoch){halt();showError(e);status('수집을 멈췄어요. 이미 저장된 기록은 내보낼 수 있어요.');await persistSummary();await refreshSessions(session?.id);}}
@@ -132,6 +151,15 @@ function drawAxes(label){
     ctx.strokeStyle=ctx.fillStyle=color;ctx.lineWidth=2;ctx.beginPath();ctx.moveTo(...start);ctx.lineTo(...end);ctx.stroke();ctx.beginPath();ctx.arc(...end,3,0,Math.PI*2);ctx.fill();ctx.font='bold 14px system-ui';ctx.fillText(text,end[0]+5,end[1]-5);
   }
 }
+function drawCaptureGuide(){
+  if(!stream||$('capture-scene').value!=='side')return;
+  const crop=reviewCrop(view.videoWidth,view.videoHeight,captureGuide);if(!crop)return;
+  const a=point(crop.x,crop.y),b=point(crop.x+crop.width,crop.y+crop.height);
+  const x=Math.min(a[0],b[0]),y=Math.min(a[1],b[1]),w=Math.abs(b[0]-a[0]),h=Math.abs(b[1]-a[1]);
+  ctx.save();ctx.strokeStyle='#92e9fa';ctx.lineWidth=2;ctx.setLineDash([9,6]);ctx.strokeRect(x,y,w,h);ctx.setLineDash([]);
+  ctx.fillStyle='#101b23dd';ctx.fillRect(x,y,Math.min(w,255),27);ctx.fillStyle='#c9f5ff';ctx.font='14px system-ui';ctx.fillText('확대 저장 영역 · 자동 추적 아님',x+6,y+19);ctx.restore();
+}
+
 function render(now){
   if(stream&&!opening&&!task&&!document.hidden&&video.readyState>=2&&video.currentTime!==lastFrame&&now-lastSent>=65){
     task=processFrame(epoch).finally(()=>{task=null;buttons();});buttons();
@@ -140,11 +168,11 @@ function render(now){
   if(marks.width!==w||marks.height!==h){marks.width=w;marks.height=h;renderer.setSize(w,h,false);}
   const scale=Math.min(w/view.videoWidth,h/view.videoHeight);
   camera.left=-w/(2*scale);camera.right=w/(2*scale);camera.top=h/(2*scale);camera.bottom=-h/(2*scale);camera.updateProjectionMatrix();
-  const p=displayPose,visible=stream&&lastLabel&&tracker.sample(now)&&p&&tracker.orientationSign&&now-lastPoseTime<=220;
+  const p=displayPose,visible=stream&&$('capture-scene').value!=='side'&&lastLabel&&tracker.sample(now)&&p&&tracker.orientationSign&&now-lastPoseTime<=220;
   rig.visible=!!visible&&$('show-watch').checked;
   if(visible){rig.position.copy(p.position);rig.quaternion.copy(p.rotation);rig.caseMount.rotation.set(0,0,THREE.MathUtils.degToRad(watchRotationDegrees(90,tracker.watchOrientationSign)));
     rig.fit({...wristDimensions(p.wristRadius/(.65*.46),TEACHER_FIT['wrist-width'],TEACHER_FIT['wrist-depth']),caseSize:p.size,height:0,sample:false});}
-  ctx.clearRect(0,0,w,h);if(visible)drawAxes(lastLabel);renderer.render(scene,camera);
+  ctx.clearRect(0,0,w,h);if(visible)drawAxes(lastLabel);drawCaptureGuide();renderer.render(scene,camera);
   $('diagnostic').textContent=JSON.stringify({version:CAPTURE_VERSION,ready,modelLoaded:!!model,session:session?.id||null,saved:session?.count||0,lastSaveAgeMs:Number.isFinite(savedTime)?Math.round(now-savedTime):null,...latestDiagnostic,rejected},null,2);
 }
 $('export').onclick=async()=>{
@@ -175,7 +203,7 @@ async function boot(){
     const load=async()=>{const response=await fetch('./datejust-ar.glb');if(!response.ok)throw Error('GLB HTTP '+response.status);
       const buffer=await response.arrayBuffer();inspectGLB(buffer);const draco=new DRACOLoader().setDecoderPath('./vendor/three/draco/');
       try{const gltf=await new GLTFLoader().setDRACOLoader(draco).parseAsync(buffer,'');model=normalizeImportedWatch(gltf.scene);rig.caseMount.add(model);$('model-status').textContent='Datejust GLB 준비 완료';}finally{draco.dispose();}};
-    await Promise.all([detector.initialize(),load()]);ready=true;buttons();status('준비됐어요. 카메라를 켜면 보정 후 자동으로 저장해요.');
+    await Promise.all([detector.initialize(),load()]);ready=true;buttons();status('준비됐어요. 촬영 모드를 확인하고 카메라를 켜 주세요.');
   }catch(e){showError(e);status('준비하지 못했어요. 오류 내용을 확인해 주세요.');}
 }
 document.addEventListener('visibilitychange',()=>{if(document.hidden&&(stream||opening))void end().catch(showError);});

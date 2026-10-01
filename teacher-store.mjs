@@ -1,4 +1,4 @@
-import {LIMITS,CAPTURE_VERSION} from './teacher-capture.mjs?v=2';
+import {LIMITS,CAPTURE_VERSION} from './teacher-capture.mjs?v=3';
 const request=r=>new Promise((resolve,reject)=>{r.onsuccess=()=>resolve(r.result);r.onerror=()=>reject(r.error);});
 const complete=tx=>new Promise((resolve,reject)=>{tx.oncomplete=resolve;tx.onabort=()=>reject(tx.error||Error('Storage transaction aborted'));tx.onerror=()=>{};});
 
@@ -79,12 +79,21 @@ export async function sessionArchive(session,records){
   const files=[],frames=[],reviewFrames=[];
   for(const r of records){
     const review=r.label.kind==='review',destination=review?reviewFrames:frames;
-    const stem=String(r.index).padStart(5,'0'),image=`${review?'review':'frames'}/${stem}.jpg`,cropImage=!review&&r.cropImage?`crops/${stem}.jpg`:null;
+    const stem=String(r.index).padStart(5,'0'),image=`${review?'review':'frames'}/${stem}.jpg`,cropImage=r.cropImage?`${review?'review-crops':'crops'}/${stem}.jpg`:null;
     files.push([image,r.image]);if(cropImage)files.push([cropImage,r.cropImage]);
     destination.push({...r.label,index:destination.length,recordIndex:r.index,image,cropImage,
       ...(review?{axes:null,center2d:null,approvedForTraining:false}:{})});
   }
   files.push(['manifest.json',JSON.stringify({schema:session.version||'teacher-01',session,recordCounts:{total:records.length,labeled:frames.length,review:reviewFrames.length},frames,reviewFrames},null,2)]);
+  if(session.version==='teacher-03')files.push(['annotation-template.json',JSON.stringify({
+    schema:'wrist-review-points-01',sessionId:session.id,splitGroup:session.id,
+    coordinateFrame:'Original unmirrored full image pixels; x right, y down. Crop coordinates must be mapped back before labeling.',
+    definitions:{C:'intended watch center',A:'12 oclock reference',B:'6 oclock reference'},
+    instructions:'Mark visible points only. Set occluded points to state=occluded with imagePoint=null and supervisionMask=0. Never reflect B to invent A. No metric depth or full 3D rotation is supplied.',
+    items:reviewFrames.map(f=>({recordIndex:f.recordIndex,image:f.image,cropImage:f.cropImage,imageSize:f.imageSize,
+      frameTimeMs:f.frameTimeMs,scene:f.scene,crop:f.crop,reviewed:false,approvedForTraining:false,
+      targets:Object.fromEntries(['C','A','B'].map(k=>[k,{imagePoint:null,state:'unreviewed',supervisionMask:0}])),threeDRotation:null}))
+  },null,2)]);
   files.push(['REVIEW.txt','reviewFrames are diagnostic images, NOT training labels. axes and center2d are null.\nAny evidence contains untrusted teacher estimates only. The side scene tag is user-selected, not a measured angle.\nSession summary includes rejected observations even after the last saved image; the trace is bounded.\n']);
   files.push(['README.txt','Teacher pseudo-labels, not independent ground truth. No student training has been run.\nImages and labels share one captured, unmirrored source frame. Pixel coordinates refer to imageSize.\n+Y=twelve, -Y=six, +Z=dial outward, -Z=opposite dial normal, +X=three. Camera +X right, +Y up, +Z toward camera.\ncenter2d is the projected GLB case-contact origin. Z is relative renderer depth, NOT measured camera distance.\nReview wrist centers, rotations, and candidate crops before training. A crop excludes predicted hand landmarks, not a verified segmentation.\nSplit evaluation by recording session/person/environment, not adjacent frames.\n']);
   return makeZip(files);
