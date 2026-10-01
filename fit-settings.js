@@ -2,15 +2,13 @@ export const FIT_LIMITS = {
   scale: [0.3, 2], offset: [0.1, 0.95], rotation: [-180, 180],
   'tilt-x': [-180, 180], 'tilt-y': [-180, 180], height: [-0.6, 0.8],
   'wrist-width': [0.65, 2], 'wrist-depth': [0.6, 2],
-  'occlusion-margin': [1, 1.25],
 };
 export const FIT_CONTROLS = Object.keys(FIT_LIMITS);
 export function defaultFit(engine = 'hand', model = 'sample') {
   return { scale: model === 'datejust' ? 1 : engine === 'wrist' ? 1.2 : 1.35, offset: 0.5, rotation: 90,
     'tilt-x': 0, 'tilt-y': 0, height: 0,
     'wrist-width': engine === 'wrist' ? 1 : 1.3,
-    'wrist-depth': engine === 'wrist' ? 1 : 1.4,
-    'occlusion-margin': model === 'sample' ? 1 : 1.1, occlusion: true };
+    'wrist-depth': engine === 'wrist' ? 1 : 1.4, occlusion: true };
 }
 export function sanitizeFit(value, engine, model) {
   const result = defaultFit(engine, model);

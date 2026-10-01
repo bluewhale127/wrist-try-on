@@ -12,20 +12,6 @@ const smoothstep = t => { t = Math.max(0, Math.min(1, t)); return t * t * (3 - 2
 const SEGMENTS = 80;
 const CONNECTOR_SEGMENTS = 8;
 
-// The forearm widens away from the hand (-Y). Expand toward the palm side
-// while keeping the dorsal contact plane at Z=1, so the case is not swallowed.
-function forearmGeometry(radialSegments) {
-  const geometry = new THREE.CylinderGeometry(1, 1, 1, radialSegments, 8);
-  const positions = geometry.attributes.position;
-  for (let i = 0; i < positions.count; i++) {
-    const widening = 1 + 0.16 * smoothstep(-positions.getY(i) * 2);
-    positions.setX(i, positions.getX(i) * widening);
-    positions.setZ(i, 1 + (positions.getZ(i) - 1) * widening);
-  }
-  geometry.computeVertexNormals(); geometry.computeBoundingBox(); geometry.computeBoundingSphere();
-  return geometry;
-}
-
 // A straight strap leaving a lug touches the wrist at the ellipse's tangent.
 // Blending the lug into a long arc creates an unsupported shelf above the skin.
 function tangentAngle(point, radiusX, radiusZ, side) {
@@ -84,16 +70,10 @@ export class WristRig extends THREE.Group {
     super();
     this.caseMount = new THREE.Group();
     const cylinder = new THREE.CylinderGeometry(1, 1, 1, 64, 4);
-    this.cylinderGeometry = cylinder;
-    this.forearmGeometry = forearmGeometry(64);
     this.occluder = new THREE.Mesh(cylinder, new THREE.MeshBasicMaterial({ colorWrite: false, depthWrite: true, side: THREE.DoubleSide }));
     this.occluder.renderOrder = -10;
     const guideCylinder = new THREE.CylinderGeometry(1, 1, 1, 16, 1);
-    this.cylinderGuideGeometry = new THREE.EdgesGeometry(guideCylinder);
-    const guideForearm = forearmGeometry(16);
-    this.forearmGuideGeometry = new THREE.EdgesGeometry(guideForearm);
-    guideForearm.dispose();
-    this.guide = new THREE.LineSegments(this.cylinderGuideGeometry, new THREE.LineBasicMaterial({ color: 0xa2efdb, transparent: true, opacity: 0.4, depthWrite: false, depthTest: false }));
+    this.guide = new THREE.LineSegments(new THREE.EdgesGeometry(guideCylinder), new THREE.LineBasicMaterial({ color: 0xa2efdb, transparent: true, opacity: 0.4, depthWrite: false, depthTest: false }));
     guideCylinder.dispose();
     this.guide.renderOrder = 3; this.guide.visible = false;
     const geometry = new THREE.BufferGeometry(), indices = [];
@@ -107,14 +87,9 @@ export class WristRig extends THREE.Group {
     this.add(this.occluder, this.caseMount, this.strap, this.guide);
     this.lastFit = null;
   }
-  fit({ radiusX, radiusZ, length, caseSize, height = 0, sample = false, guide = false, occlusionMargin = 1 }) {
-    const margin = sample || !Number.isFinite(occlusionMargin) ? 1 : Math.max(1, Math.min(1.25, occlusionMargin));
-    const corrected = margin > 1.0001;
-    this.occluder.geometry = corrected ? this.forearmGeometry : this.cylinderGeometry;
-    this.occluder.scale.set(radiusX * margin, length, radiusZ * margin);
-    this.occluder.position.z = radiusZ * (1 - margin);
-    this.guide.geometry = corrected ? this.forearmGuideGeometry : this.cylinderGuideGeometry;
-    this.guide.scale.copy(this.occluder.scale); this.guide.position.copy(this.occluder.position); this.guide.visible = guide;
+  fit({ radiusX, radiusZ, length, caseSize, height = 0, sample = false, guide = false }) {
+    this.occluder.scale.set(radiusX, length, radiusZ);
+    this.guide.scale.copy(this.occluder.scale); this.guide.visible = guide;
     this.caseMount.position.z = radiusZ + height * caseSize;
     this.caseMount.scale.setScalar(caseSize);
     this.strap.visible = sample;

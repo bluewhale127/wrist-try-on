@@ -9,10 +9,10 @@ import { HandDetector } from './hand-detector.js?v=75';
 import { RearWristAssist, rearObservation } from './rear-assist.js?v=75';
 import { HandTarget } from './hand-target.js?v=73';
 import { makeSampleWatch, disposeModel, inspectGLB, normalizeImportedWatch } from './watch.js?v=716';
-import { WristRig, wristDimensions } from './wrist-rig.js?v=718';
+import { WristRig, wristDimensions } from './wrist-rig.js?v=719';
 import { DiagnosticRecorder } from './diagnostic-recorder.js?v=711';
 
-import { FIT_CONTROLS, FitSettings, defaultFit } from './fit-settings.js?v=718';
+import { FIT_CONTROLS, FitSettings, defaultFit } from './fit-settings.js?v=719';
 
 const $ = id => document.getElementById(id);
 const video = $('camera'), stage = $('stage'), status = $('status'), errorBox = $('error');
@@ -76,7 +76,7 @@ function fit() {
 function updateFit() {
   const values = fit();
   for (const id of controls) {
-    $(id + '-output').value = id === 'scale' || id === 'occlusion-margin' || id.startsWith('wrist-') ? `${Math.round(values[id] * 100)}%` : id === 'offset' ? (Math.abs(values[id] - defaults[id]) < 0.005 ? '기본' : `${Math.round(values[id] * 100)}`) : id === 'height' ? values[id].toFixed(2) : `${values[id]}°`;
+    $(id + '-output').value = id === 'scale' || id.startsWith('wrist-') ? `${Math.round(values[id] * 100)}%` : id === 'offset' ? (Math.abs(values[id] - defaults[id]) < 0.005 ? '기본' : `${Math.round(values[id] * 100)}`) : id === 'height' ? values[id].toFixed(2) : `${values[id]}°`;
   }
   applyCaseOrientation(values);
 }
@@ -89,7 +89,6 @@ function applyFit(values) {
   rearAssist.reset(); rearAxis.reset();
   for (const id of controls) $(id).value = values[id];
   $('occlusion').checked = values.occlusion;
-  $('occlusion-margin').disabled = !values.occlusion;
   updateFit();
 }
 function saveFit() {
@@ -260,7 +259,7 @@ function render(time) {
     anchor.visible = true;
     anchor.position.set(0, 2, 0);
     const baseSize = Math.min(width * 0.49, height * 0.35);
-    anchor.fit({ ...wristDimensions(baseSize / 0.65, values['wrist-width'], values['wrist-depth']), caseSize: baseSize * values.scale, height: values.height, sample: !!watch.userData.sample, guide: $('wrist-guide').checked, occlusionMargin: values['occlusion-margin'] });
+    anchor.fit({ ...wristDimensions(baseSize / 0.65, values['wrist-width'], values['wrist-depth']), caseSize: baseSize * values.scale, height: values.height, sample: !!watch.userData.sample, guide: $('wrist-guide').checked });
     anchor.rotation.set(0.2, reduceMotion ? -0.25 : Math.sin(time * 0.0003) * 0.25 - 0.15, -0.08);
     occluder.visible = false;
   } else {
@@ -276,7 +275,7 @@ function render(time) {
       renderSize += (targetPose.size - renderSize) * alpha;
       anchor.quaternion.copy(targetPose.rotation);
       anchor.position.copy(renderCenter);
-      anchor.fit({ ...wristDimensions(renderRadius / (0.65 * 0.46), values['wrist-width'], values['wrist-depth']), caseSize: renderSize, height: values.height, sample: !!watch.userData.sample, guide: $('wrist-guide').checked, occlusionMargin: values['occlusion-margin'] });
+      anchor.fit({ ...wristDimensions(renderRadius / (0.65 * 0.46), values['wrist-width'], values['wrist-depth']), caseSize: renderSize, height: values.height, sample: !!watch.userData.sample, guide: $('wrist-guide').checked });
       poseInitialized = true;
     } else poseInitialized = false;
     occluder.visible = $('occlusion').checked;
@@ -320,7 +319,6 @@ function drawDiagnostics(time) {
 function replaceModel(model) {
   if (watch) { adjustment.remove(watch); disposeModel(watch); }
   watch = model; adjustment.add(watch);
-  $('glb-occlusion').hidden = !!watch.userData.sample;
 }
 async function importModel(file, profileKey) {
   if (!file) return;
@@ -404,7 +402,7 @@ $('rear-assist').addEventListener('change',()=>{
   operation++;rearAssist.reset();tracker.reset(); rearAxis.reset();handTarget.reset();poseInitialized=false;
   notice('후면 추적 설정을 바꿨어요. 손등과 손가락을 보여 기준을 다시 맞춰 주세요.');
 });
-$('occlusion').addEventListener('change', () => { $('occlusion-margin').disabled = !$('occlusion').checked; saveFit(); });
+$('occlusion').addEventListener('change', saveFit);
 $('rear-axis').addEventListener('change',()=>{rearAxis.reset();rearAssist.reset();});
 $('reset').addEventListener('click', resetFit);
 $('align-dial').addEventListener('click', () => {
@@ -434,7 +432,7 @@ $('save-diagnostics').addEventListener('click',()=>{
   if(!diagnosticRecorder.frames.length && !diagnosticRecorder.renders.length)return;
   const time = performance.now(); diagnosticRecorder.stop(time, 'save');
   updateDiagnosticUi(time, true);
-  const blob=new Blob([JSON.stringify(diagnosticRecorder.export(time, {version:'0.7.18',engine,timeOrigin:performance.timeOrigin}))],{type:'application/json'});
+  const blob=new Blob([JSON.stringify(diagnosticRecorder.export(time, {version:'0.7.19',engine,timeOrigin:performance.timeOrigin}))],{type:'application/json'});
   const url=URL.createObjectURL(blob), link=document.createElement('a');link.href=url;link.download='wrist-diagnostics.json';link.click();setTimeout(()=>URL.revokeObjectURL(url),1000);
 });
 $('start').addEventListener('click', () => mode === 'idle' ? startCamera() : stopCamera());
