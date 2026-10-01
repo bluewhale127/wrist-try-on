@@ -28,6 +28,9 @@ for (const name of ['wrist-glb.html', 'wrist-glb.mjs', 'wrist-glb-placement.mjs'
   await cp(path.join(root, name), path.join(output, name));
 }
 // Only active runtime assets are published; retired experiments stay out of the site.
+for (const name of ['wrist-teacher.html', 'wrist-teacher.mjs', 'watch-teacher-axes.mjs', 'teacher-capture.mjs', 'teacher-store.mjs']) {
+  await cp(path.join(root, name), path.join(output, name));
+}
 for (const name of ['three', 'vision']) await cp(path.join(root, 'vendor', name), path.join(output, 'vendor', name), { recursive: true });
 await cp(path.join(root, 'datejust-ar.glb'), path.join(output, 'datejust-ar.glb'));
 await writeFile(path.join(output, '.nojekyll'), '');
