@@ -20,7 +20,7 @@ for (const name of ['index.html', 'app.js', 'diagnostic-recorder.js', 'fit-setti
   await cp(path.join(root, name), path.join(output, name), { recursive: true });
 }
 // Centre-only wrist try-on is a separate validation page, leaving the hand app intact.
-for (const name of ['wrist-watch.html', 'wrist-watch.mjs', 'wrist-watch-fit.mjs', 'wrist-center']) {
+for (const name of ['wrist-watch.html', 'wrist-watch.mjs', 'wrist-watch-fit.mjs', 'wrist-watch-diagnostics.mjs', 'wrist-center']) {
   await cp(path.join(root, name), path.join(output, name), { recursive: true });
 }
 // Only active runtime assets are published; retired experiments stay out of the site.

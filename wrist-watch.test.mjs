@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {Vector3} from './vendor/three/three.module.js';
 import {DEFAULTS,sanitizeSettings,manualPlacement,CenterObservation} from './wrist-watch-fit.mjs';
+import {describeObservation,diagnosticRecord} from './wrist-watch-diagnostics.mjs';
 const close=(a,b)=>assert.ok(Math.abs(a-b)<1e-8,`${a} != ${b}`);
 const portrait={videoWidth:406,videoHeight:720,width:500,height:600};
 const valid={x:250,y:400,score:.8,accepted:true};
@@ -58,4 +59,17 @@ test('saved settings are finite, bounded and isolated from unknown fields',()=>{
   const settings=sanitizeSettings({scale:99,heading:Infinity,tilt:-99,occlusion:false,width:NaN,unknown:1});
   assert.equal(settings.scale,2);assert.equal(settings.heading,0);assert.equal(settings.tilt,-80);
   assert.equal(settings.occlusion,false);assert.equal(settings.width,DEFAULTS.width);assert.equal(settings.unknown,undefined);
+});
+test('a fast low-score observation is reported as low-score rather than camera delay',()=>{
+  assert.equal(describeObservation({...valid,score:.1,accepted:false},40).code,'low-score');
+  assert.equal(describeObservation(valid,400).code,'stale');
+  assert.equal(describeObservation({...valid,accepted:false},40).code,'outside');
+  assert.equal(describeObservation(null,40).code,'invalid');
+  assert.equal(describeObservation(valid,40).code,'accepted');
+});
+test('failed detection retains the raw model score, source size and timing for diagnosis',()=>{
+  const record=diagnosticRecord({pose:{...valid,score:.1,accepted:false},time:100,width:720,height:1280,frameTime:10,inferenceMs:38},145,{sourceMode:'camera',mirror:false,capturePath:'video-imagebitmap',settings:DEFAULTS});
+  assert.equal(record.reason,'low-score');assert.equal(record.candidate.score,.1);assert.equal(record.width,720);
+  assert.equal(record.resultAgeMs,45);assert.equal(record.inferenceMs,38);assert.equal(record.threshold,.55);
+  assert.equal(record.rgba,undefined);assert.equal(record.image,undefined);
 });

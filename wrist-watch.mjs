@@ -5,6 +5,7 @@ import {RoomEnvironment} from 'three/addons/environments/RoomEnvironment.js';
 import {makeSampleWatch,disposeModel,inspectGLB,normalizeImportedWatch} from './watch.js?v=716';
 import {WristRig} from './wrist-rig.js?v=719';
 import {DEFAULTS,LIMITS,sanitizeSettings,manualPlacement,CenterObservation} from './wrist-watch-fit.mjs?v=1';
+import {describeObservation,diagnosticRecord} from './wrist-watch-diagnostics.mjs?v=3';
 
 const $=id=>document.getElementById(id),video=$('camera'),stage=$('stage');
 const STORAGE='viver-wrist-center-watch-v1',observation=new CenterObservation();
@@ -14,6 +15,7 @@ let renderer,scene,camera,rig,model,environment,worker,ready=false,bitmap=false;
 let active=false,opening=false,sourceMode=null,mirror=false,facing='environment',stream,videoURL;
 let generation=0,requestId=0,pending=null,capturing=false,lastSent=-Infinity,lastVideoTime=-1;
 let modelOperation=0,modelName='임시 시계',lastMs=0,observations=0,placement=null;
+let lastResult=null,captureRequested=false,photoURLs=[];
 const capture=document.createElement('canvas'),captureContext=capture.getContext('2d',{willReadFrequently:true});
 const mark=$('center-mark'),markContext=mark.getContext('2d');
 let view={width:1,height:1,videoWidth:0,videoHeight:0};
@@ -25,6 +27,7 @@ function buttons(){
   $('switch').disabled=!ready||fatal||opening;
   $('stop').disabled=!active&&!opening;
   $('file').disabled=!ready||fatal||opening;
+  $('capture-frame').disabled=!ready||fatal||!active||captureRequested||!!pending?.snapshot;
 }
 function updateControls(save=false){
   settings=sanitizeSettings(settings);
@@ -79,9 +82,10 @@ $('model-file').onchange=async event=>{
   event.target.value='';
 };
 
-function resetObservation(){generation++;observation.reset();lastSent=-Infinity;lastVideoTime=-1;if(rig)rig.visible=false;}
+function resetObservation(){generation++;observation.reset();lastResult=null;lastSent=-Infinity;lastVideoTime=-1;if(rig)rig.visible=false;}
 function stopSource(showMessage=true){
   resetObservation();active=false;opening=false;sourceMode=null;
+  captureRequested=false;
   stream?.getTracks().forEach(track=>track.stop());stream=null;
   video.pause();video.srcObject=null;video.removeAttribute('src');video.load();
   if(videoURL){URL.revokeObjectURL(videoURL);videoURL=null;}
@@ -120,13 +124,13 @@ video.addEventListener('seeking',()=>resetObservation());
 video.addEventListener('seeked',()=>{if(active)void submitFrame();});
 video.addEventListener('error',()=>{if(active||opening){stopSource(false);message('이 영상을 재생할 수 없어요. 다른 MP4 영상을 선택해 주세요.',true);}});
 document.addEventListener('visibilitychange',()=>{if(document.hidden&&(sourceMode==='camera'||opening))stopSource();});
-window.addEventListener('pagehide',()=>{stopSource(false);worker?.terminate();});
+window.addEventListener('pagehide',()=>{stopSource(false);worker?.terminate();photoURLs.forEach(url=>URL.revokeObjectURL(url));});
 window.addEventListener('pageshow',event=>{if(event.persisted)location.reload();});
 
 async function submitFrame(){
   if(!ready||!active||fatal||pending||capturing||video.readyState<2||video.seeking||document.hidden)return;
   const now=performance.now(),frameTime=video.currentTime;
-  if(now-lastSent<60||frameTime===lastVideoTime)return;
+  if(!captureRequested&&(now-lastSent<60||frameTime===lastVideoTime))return;
   const width=video.videoWidth,height=video.videoHeight;if(!width||!height)return;
   const id=++requestId,epoch=generation;capturing=true;
   try{
@@ -139,14 +143,36 @@ async function submitFrame(){
       captureContext.drawImage(video,0,0,width,height);rgba=captureContext.getImageData(0,0,width,height).data;
     }
     if(epoch!==generation||!active){frame?.close();return;}
-    pending={id,epoch,time:now};lastSent=now;lastVideoTime=frameTime;
-    try{worker.postMessage({type:'frame',id,time:now,frameTime,width,height,frame,rgba},frame?[frame]:[rgba.buffer]);}
+    pending={id,epoch,time:now,snapshot:captureRequested,capturePath:frame?'video-imagebitmap':'video-canvas'};
+    captureRequested=false;buttons();lastSent=now;lastVideoTime=frameTime;
+    try{worker.postMessage({type:'frame',id,time:now,frameTime,width,height,frame,rgba,snapshot:pending.snapshot},frame?[frame]:[rgba.buffer]);}
     catch(error){frame?.close();pending=null;throw error;}
   }catch(error){if(epoch===generation)fail(`영상 처리 중 오류가 발생했어요: ${error.message}`);}
   finally{capturing=false;}
 }
 function onVideoFrame(){void submitFrame();video.requestVideoFrameCallback(onVideoFrame);}
 if(video.requestVideoFrameCallback)video.requestVideoFrameCallback(onVideoFrame);
+
+$('capture-frame').onclick=()=>{if(!active||fatal)return;captureRequested=true;buttons();$('photo-status').textContent='다음 입력 프레임을 준비하고 있어요.';void submitFrame();};
+async function prepareDiagnosticPhoto(data,record,epoch){
+  const header=116,canvas=document.createElement('canvas');canvas.width=data.width;canvas.height=data.height+header;
+  const context=canvas.getContext('2d');context.fillStyle='#101820';context.fillRect(0,0,canvas.width,header);
+  context.fillStyle='#edf5f4';context.font=`${Math.max(12,Math.min(22,data.width/28))}px sans-serif`;
+  context.fillText('WRIST LIVE 03 · 원본 입력 프레임',12,29);
+  context.fillText(`점수 ${record.candidate?.score?.toFixed(3)??'—'} / 기준 0.550 · ${record.reason}`,12,57);
+  context.fillText(`${data.width}×${data.height} · 분석 ${Math.round(data.inferenceMs)}ms · 도착 ${Math.round(record.resultAgeMs)}ms`,12,83);
+  context.fillText('아래 사진에는 시계나 예측 좌표를 그리지 않았습니다.',12,106);
+  context.putImageData(new ImageData(new Uint8ClampedArray(data.rgba),data.width,data.height),0,header);
+  const blob=await new Promise(resolve=>canvas.toBlob(resolve,'image/png'));
+  if(!blob||epoch!==generation)return;
+  photoURLs.forEach(url=>URL.revokeObjectURL(url));photoURLs=[];
+  const imageURL=URL.createObjectURL(blob),jsonURL=URL.createObjectURL(new Blob([JSON.stringify({...record,imageHeaderHeight:header},null,2)],{type:'application/json'}));
+  photoURLs.push(imageURL,jsonURL);$('diagnostic-preview').src=imageURL;
+  const name=`wrist-live-${new Date().toISOString().replace(/[:.]/g,'-')}`;
+  $('download-photo').href=imageURL;$('download-photo').download=name+'.png';
+  $('download-diagnostic').href=jsonURL;$('download-diagnostic').download=name+'.json';
+  $('diagnostic-result').hidden=false;$('photo-status').textContent='사진을 만들었어요. 다운로드한 사진으로 촬영 조건을 확인할 수 있어요. 자동 전송은 하지 않아요.';
+}
 
 const initTimeout=setTimeout(()=>fail('손목 모델을 불러오는 데 시간이 너무 오래 걸렸어요.'),60000);
 function boot(){
@@ -164,16 +190,18 @@ function boot(){
       renderer.setSize(width,height,false);camera.left=-width/2;camera.right=width/2;camera.top=height/2;camera.bottom=-height/2;camera.updateProjectionMatrix();
       mark.width=width;mark.height=height;
     }).observe(stage);
-    worker=new Worker(new URL('./wrist-center/center-worker.mjs?v=1',import.meta.url),{type:'module'});
+    worker=new Worker(new URL('./wrist-center/center-worker-06.mjs?v=1',import.meta.url),{type:'module'});
     worker.onmessage=({data})=>{
       if(fatal)return;
       if(data.type==='ready'){clearTimeout(initTimeout);ready=true;bitmap=data.bitmap;buttons();$('badge').textContent='카메라를 켜고 손목을 보여 주세요';message('준비됐어요. 손목만 보여도 시작할 수 있어요.');return;}
       if(data.type==='error'){fail(`손목 모델 오류: ${data.message}`);return;}
       if(data.type!=='result'||data.id!==pending?.id)return;
-      const request=pending;pending=null;
+      const request=pending;pending=null;buttons();
       if(request.epoch!==generation||!active)return;
       lastMs=data.inferenceMs;observations++;
-      observation.update(data.pose,data.time,data.width,data.height,performance.now());
+      const now=performance.now();observation.update(data.pose,data.time,data.width,data.height,now);
+      lastResult=diagnosticRecord(data,now,{sourceMode,mirror,capturePath:request.capturePath,settings});
+      if(request.snapshot&&data.rgba)void prepareDiagnosticPhoto(data,lastResult,request.epoch).catch(error=>{$('photo-status').textContent=`사진 생성 오류: ${error.message}`;});
     };
     worker.onerror=event=>fail(`손목 모델 실행 오류: ${event.message}`);
     worker.postMessage({type:'init'});
@@ -182,7 +210,7 @@ function boot(){
 }
 function render(now){
   if(pending&&now-pending.time>8000){pending=null;fail('손목 분석이 멈췄어요.');}
-  if(!video.requestVideoFrameCallback)void submitFrame();
+  if(!video.requestVideoFrameCallback||captureRequested)void submitFrame();
   const pose=active?observation.sample(now):null;
   view.videoWidth=video.videoWidth;view.videoHeight=video.videoHeight;
   placement=pose?manualPlacement(pose,view,settings,mirror):null;rig.visible=!!placement;
@@ -193,11 +221,13 @@ function render(now){
     if($('show-center').checked){const x=placement.target.x+view.width/2,y=view.height/2-placement.target.y;markContext.strokeStyle='#fff38f';markContext.lineWidth=2;markContext.beginPath();markContext.arc(x,y,6,0,Math.PI*2);markContext.moveTo(x-12,y);markContext.lineTo(x+12,y);markContext.moveTo(x,y-12);markContext.lineTo(x,y+12);markContext.stroke();}
   }
   if(active){
-    const text=placement?'손목 중심 추적 중 · 크기·방향 수동':'손목을 찾고 있어요';if($('badge').textContent!==text)$('badge').textContent=text;
-    $('metrics').textContent=lastMs?`분석 ${Math.round(lastMs)}ms · ${placement?`점수 ${pose.score.toFixed(2)}`:'손목이 다시 보이면 자동으로 붙어요'}`:'';
+    const reason=lastResult?describeObservation(lastResult.candidate,lastResult.resultAgeMs):null;
+    const text=placement?'손목 중심 추적 중 · 크기·방향 수동':reason?.code==='accepted'?'다음 손목 관측을 기다리고 있어요':reason?.text||'카메라의 첫 입력을 기다리고 있어요';
+    if($('badge').textContent!==text)$('badge').textContent=text;
+    $('metrics').textContent=lastResult?`모델 점수 ${lastResult.candidate?.score?.toFixed(3)??'—'} / 기준 0.550 · 분석 ${Math.round(lastMs)}ms · 입력 ${lastResult.width}×${lastResult.height} · 관측 ${observations}회`:'';
   }
   renderer.render(scene,camera);
 }
 // Read-only snapshots for local regression tests; no camera images are exposed.
-Object.defineProperty(window,'__wristWatch',{get:()=>({ready,active,opening,sourceMode,mirror,fatal,visible:!!rig?.visible,pose:observation.sample(performance.now()),settings:{...settings},modelName,observations,lastMs,generation,pending:!!pending,caseSize:placement?.caseSize,projectedCenter:placement?[placement.target.x+view.width/2,view.height/2-placement.target.y]:null})});
+Object.defineProperty(window,'__wristWatch',{get:()=>({ready,active,opening,sourceMode,mirror,fatal,visible:!!rig?.visible,pose:observation.sample(performance.now()),lastResult,settings:{...settings},modelName,observations,lastMs,generation,pending:!!pending,caseSize:placement?.caseSize,projectedCenter:placement?[placement.target.x+view.width/2,view.height/2-placement.target.y]:null})});
 boot();
