@@ -24,7 +24,7 @@ for (const name of ['wrist-watch.html', 'wrist-watch.mjs', 'wrist-watch-fit.mjs'
   await cp(path.join(root, name), path.join(output, name), { recursive: true });
 }
 // GLB fitting is a separate mobile experiment. No private training photos are published.
-for (const name of ['wrist-glb.html', 'wrist-glb.mjs', 'wrist-glb-placement.mjs', 'wrist-fit-geometry.mjs']) {
+for (const name of ['wrist-glb.html', 'wrist-glb.mjs', 'wrist-glb-placement.mjs', 'wrist-fit-geometry.mjs', 'wrist-glb-center-test.html', 'wrist-glb-center-test.mjs']) {
   await cp(path.join(root, name), path.join(output, name));
 }
 // Only active runtime assets are published; retired experiments stay out of the site.
