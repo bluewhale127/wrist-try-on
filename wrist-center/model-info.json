@@ -1,0 +1,9 @@
+{
+  "id": "wrist-center-05",
+  "centerOnly": true,
+  "threshold": 0.55,
+  "trainingImages": 27,
+  "userConfirmedCenters": 15,
+  "independentTest": false,
+  "modelSha256": "36b186fd86e5c866082142228c5805bfe8d3ce4a72957c501f37cc4e9f7e6bdc"
+}
