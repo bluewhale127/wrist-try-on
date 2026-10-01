@@ -11,7 +11,7 @@ const $=id=>document.getElementById(id),video=$('video'),photo=$('photo'),stage=
 const DEFAULTS={scale:1,roll:0,tilt:0,heading:0,dial:90,width:1,depth:1,height:0};let settings={...DEFAULTS};
 let renderer,scene,camera,rig,model,modelName='',modelError=null,worker,ready=false,source='none',sourceLabel='',imageId=null;
 let stream,objectURL,epoch=0,pending=null,seq=0,opening=false,facing='environment',lastFrame=-1,lastSent=-Infinity;
-let result=null,photoPose=null,geometry=null,placement=null,inferenceMs=0,lastDiagnostics=0;
+let result=null,photoPose=null,geometry=null,placement=null,inferenceMs=0,roundTripMs=0,lastDiagnostics=0;
 const tracker=new CenterObservation(),view={width:1,height:1,videoWidth:0,videoHeight:0};
 const marks=$('marks'),ctx=marks.getContext('2d');
 function status(s,error=false){$('status').textContent=s;$('status').classList.toggle('error',error);}
@@ -110,12 +110,14 @@ function render(now){
     for(const [k,col] of Object.entries({A:'#72efb9',B:'#ff82b8',C:'#7acbff'}))if(result.points[k]?.accepted)drawPoint(result.points[k].center,col,k==='A'?'A · 12':k==='B'?'B · 6':'C');
     if(pose)drawPoint([pose.x,pose.y],'#ffe3a5','중심');
   }
-  const fitText=useAuto?'자동 너비·평면 방향 적용 · 입체 회전은 수동':pose?'자동 기준 없음 · 수동 크기·방향 사용':'손목 중심을 찾는 중';
+  const trackingState=tracker.state(now);
+  const waitingText=trackingState.reason==='stale'?'분석 응답이 늦어 재확인 중':trackingState.phase==='acquiring'?'손목 위치 확인 중':'손목 중심을 찾는 중';
+  const fitText=useAuto?'자동 너비·평면 방향 적용 · 입체 회전은 수동':pose?'자동 기준 없음 · 수동 크기·방향 사용':waitingText;
   $('fit-status').textContent=fitText;$('heading').disabled=!!useAuto;$('dial').disabled=!!useAuto;
-  $('badge').textContent=source==='none'?'카메라를 켜고 손목을 보여 주세요':placement?fitText:!model?'GLB를 불러오는 중':'손목 중심을 찾는 중';
+  $('badge').textContent=source==='none'?'카메라를 켜고 손목을 보여 주세요':placement?fitText:!model?'GLB를 불러오는 중':waitingText;
   if(now-lastDiagnostics>200){
-    $('metrics').textContent=result?`분석 ${Math.round(inferenceMs)}ms · 중심 신뢰도 ${result.pose?.score?.toFixed(3)??'-'}`:'';
-    $('diagnostic').textContent=JSON.stringify({ready,source,sourceLabel,imageId,modelName,modelError,meshCount:model?.userData.meshCount??0,caseAnchored:!!model?.userData.caseAnchored,visible:!!placement,automaticGeometry:!!useAuto,mirror:$('mirror').checked,pose:pose??null,points:result?.points??null,settings,caseSize:placement?.caseSize??null,heading:placement?.heading??null,dialRadians:placement?.dialRadians??null,contact:placement?[placement.target.x,placement.target.y]:null,sourceDimensions:[view.videoWidth,view.videoHeight],renderDimensions:[view.width,view.height],sourceGeometry:geometry},null,2);lastDiagnostics=now;
+    $('metrics').textContent=result?`중심 07 · 점수 ${result.pose?.score?.toFixed(3)??'-'} · 분석 ${Math.round(inferenceMs)}ms / 응답 ${Math.round(roundTripMs)}ms`:'';
+    $('diagnostic').textContent=JSON.stringify({centerModel:'07',geometryModel:'03',inferenceMs,roundTripMs,trackingState,rawPose:result?.pose??null,ready,source,sourceLabel,imageId,modelName,modelError,meshCount:model?.userData.meshCount??0,caseAnchored:!!model?.userData.caseAnchored,visible:!!placement,automaticGeometry:!!useAuto,mirror:$('mirror').checked,pose:pose??null,points:result?.points??null,settings,caseSize:placement?.caseSize??null,heading:placement?.heading??null,dialRadians:placement?.dialRadians??null,contact:placement?[placement.target.x,placement.target.y]:null,sourceDimensions:[view.videoWidth,view.videoHeight],renderDimensions:[view.width,view.height],sourceGeometry:geometry},null,2);lastDiagnostics=now;
   }
   renderer.render(scene,camera);
 }
@@ -129,7 +131,7 @@ async function boot(){
     const pmrem=new THREE.PMREMGenerator(renderer),room=new RoomEnvironment(),env=pmrem.fromScene(room,.04);scene.environment=env.texture;scene.environmentIntensity=.65;room.dispose();pmrem.dispose();
     rig=new WristRig();rig.visible=false;scene.add(rig);
     new ResizeObserver(()=>{view.width=stage.clientWidth;view.height=stage.clientHeight;renderer.setSize(view.width,view.height,false);camera.left=-view.width/2;camera.right=view.width/2;camera.top=view.height/2;camera.bottom=-view.height/2;camera.updateProjectionMatrix();marks.width=view.width;marks.height=view.height;}).observe(stage);
-    worker=new Worker('./wrist-center/fit-worker-03.mjs?v=1',{type:'module'});
+    worker=new Worker('./wrist-center/fit-worker-04.mjs?v=2',{type:'module'});
     const init=new Promise((resolve,reject)=>{
       const timer=setTimeout(()=>reject(Error('손목 모델 준비 시간 초과')),60000);
       worker.onerror=e=>{clearTimeout(timer);status('모델 실행 오류: '+e.message,true);reject(Error(e.message));};
@@ -138,7 +140,7 @@ async function boot(){
         if(data.type==='error'){clearTimeout(timer);pending=null;status('분석 오류: '+data.message,true);reject(Error(data.message));return;}
         if(data.type!=='result'||data.id!==pending?.id)return;
         const request=pending;pending=null;if(request.epoch!==epoch)return;
-        result=data;inferenceMs=data.inferenceMs;
+        result=data;inferenceMs=data.inferenceMs;roundTripMs=performance.now()-request.time;
         if(request.still){photoPose=data.pose?.accepted?data.pose:null;status(photoPose?sourceLabel+' · 시계 크기와 회전을 조절해 보세요.':sourceLabel+' · 손목 중심을 찾지 못했어요.');}
         else tracker.update(data.pose,data.time,data.width,data.height,performance.now());
       };worker.postMessage({type:'init'});
