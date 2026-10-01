@@ -4,8 +4,8 @@ import {DRACOLoader} from 'three/addons/loaders/DRACOLoader.js';
 import {RoomEnvironment} from 'three/addons/environments/RoomEnvironment.js';
 import {makeSampleWatch,disposeModel,inspectGLB,normalizeImportedWatch} from './watch.js?v=716';
 import {WristRig} from './wrist-rig.js?v=719';
-import {DEFAULTS,LIMITS,sanitizeSettings,manualPlacement,CenterObservation} from './wrist-watch-fit.mjs?v=1';
-import {describeObservation,diagnosticRecord} from './wrist-watch-diagnostics.mjs?v=3';
+import {DEFAULTS,LIMITS,sanitizeSettings,frontFacingSettings,manualPlacement,CenterObservation} from './wrist-watch-fit.mjs?v=4';
+import {describeObservation,trackingMessage,diagnosticRecord} from './wrist-watch-diagnostics.mjs?v=4';
 
 const $=id=>document.getElementById(id),video=$('camera'),stage=$('stage');
 const STORAGE='viver-wrist-center-watch-v1',observation=new CenterObservation();
@@ -40,8 +40,9 @@ function updateControls(save=false){
 }
 for(const key of Object.keys(LIMITS))$(key).addEventListener('input',()=>{settings[key]=Number($(key).value);updateControls(true);});
 for(const key of ['occlusion','guide'])$(key).addEventListener('change',()=>{settings[key]=$(key).checked;updateControls(true);});
-$('vertical').onclick=()=>{settings.heading=0;updateControls(true);};
-$('horizontal').onclick=()=>{settings.heading=-90;updateControls(true);};
+$('vertical').onclick=()=>{settings=frontFacingSettings(settings,0);updateControls(true);};
+$('horizontal').onclick=()=>{settings=frontFacingSettings(settings,-90);updateControls(true);};
+$('front-facing').onclick=()=>{settings=frontFacingSettings(settings);updateControls(true);};
 $('reset').onclick=()=>{settings={...DEFAULTS};updateControls(true);};
 updateControls();
 
@@ -158,7 +159,7 @@ async function prepareDiagnosticPhoto(data,record,epoch){
   const header=116,canvas=document.createElement('canvas');canvas.width=data.width;canvas.height=data.height+header;
   const context=canvas.getContext('2d');context.fillStyle='#101820';context.fillRect(0,0,canvas.width,header);
   context.fillStyle='#edf5f4';context.font=`${Math.max(12,Math.min(22,data.width/28))}px sans-serif`;
-  context.fillText('WRIST LIVE 03 · 원본 입력 프레임',12,29);
+  context.fillText('WRIST LIVE 04 · 원본 입력 프레임',12,29);
   context.fillText(`점수 ${record.candidate?.score?.toFixed(3)??'—'} / 기준 0.550 · ${record.reason}`,12,57);
   context.fillText(`${data.width}×${data.height} · 분석 ${Math.round(data.inferenceMs)}ms · 도착 ${Math.round(record.resultAgeMs)}ms`,12,83);
   context.fillText('아래 사진에는 시계나 예측 좌표를 그리지 않았습니다.',12,106);
@@ -200,7 +201,7 @@ function boot(){
       if(request.epoch!==generation||!active)return;
       lastMs=data.inferenceMs;observations++;
       const now=performance.now();observation.update(data.pose,data.time,data.width,data.height,now);
-      lastResult=diagnosticRecord(data,now,{sourceMode,mirror,capturePath:request.capturePath,settings});
+      lastResult=diagnosticRecord(data,now,{sourceMode,mirror,capturePath:request.capturePath,settings,tracking:observation.state(now)});
       if(request.snapshot&&data.rgba)void prepareDiagnosticPhoto(data,lastResult,request.epoch).catch(error=>{$('photo-status').textContent=`사진 생성 오류: ${error.message}`;});
     };
     worker.onerror=event=>fail(`손목 모델 실행 오류: ${event.message}`);
@@ -222,9 +223,9 @@ function render(now){
   }
   if(active){
     const reason=lastResult?describeObservation(lastResult.candidate,lastResult.resultAgeMs):null;
-    const text=placement?'손목 중심 추적 중 · 크기·방향 수동':reason?.code==='accepted'?'다음 손목 관측을 기다리고 있어요':reason?.text||'카메라의 첫 입력을 기다리고 있어요';
+    const text=trackingMessage(observation.state(now),reason);
     if($('badge').textContent!==text)$('badge').textContent=text;
-    $('metrics').textContent=lastResult?`모델 점수 ${lastResult.candidate?.score?.toFixed(3)??'—'} / 기준 0.550 · 분석 ${Math.round(lastMs)}ms · 입력 ${lastResult.width}×${lastResult.height} · 관측 ${observations}회`:'';
+    $('metrics').textContent=lastResult?`모델 점수 ${lastResult.candidate?.score?.toFixed(3)??'—'} / 시작 0.550 · 유지 0.400 · 분석 ${Math.round(lastMs)}ms · 입력 ${lastResult.width}×${lastResult.height} · 관측 ${observations}회`:'';
   }
   renderer.render(scene,camera);
 }
