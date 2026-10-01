@@ -199,20 +199,21 @@ export class WristPoseTracker {
     const rawNormalZ = Z.clone().applyQuaternion(raw).z;
     const depth = next.depthRotation?.clone();
     if (depth && this.orientationSign === -1) depth.multiply(halfTurn);
-    // Rear-camera fast reversals can cross the old per-frame confirmation
-    // threshold before it accumulates evidence. Hold the first contradiction
-    // instead of accepting the predicted branch and reinforcing its velocity.
-    // Both depth outputs share a model; require temporal agreement too.
+    // A missing turnaround observation can return to the same last-seen angle.
+    // Requiring an already observed reverse delta would then accept the wrong
+    // predicted branch before this guard can run. Hold a corroborated branch
+    // conflict even without that delta. Do not feed it back into velocity.
+    // Allow bounded depth bias; both outputs must agree with each other and
+    // clearly prefer the same candidate across observations, not just fit it.
     let turnPending = false, turnRealigned = false;
     const turn = this.turnEvidence;
-    const delta = previous && rawChoice.clone().multiply(previous.clone().invert());
-    if (delta?.w < 0) delta.set(-delta.x,-delta.y,-delta.z,-delta.w);
-    const opposesMotion = delta && new Vector3(delta.x,delta.y,delta.z).dot(this.rotationVelocity) < -0.015;
-    const localTurn = previous && Math.abs(Z.clone().applyQuaternion(previous).z) > .7 && rawChoice.angleTo(previous) < 1.05;
     const continuingTurn = turn && time-turn.time <= 160 && rawChoice.angleTo(turn.rotation) < Math.min(1.05,.2+(time-turn.time)*.018);
-    const turnConflict = !next.mirror && previous && age <= 220 && speed > 1.2 && depth && quality >= .8 &&
-      rawChoice !== rotation && opposesMotion && (continuingTurn || (age <= 150 && localTurn)) &&
-      rawChoice.angleTo(raw) < .25 && rawChoice.angleTo(depth) < .25 &&
+    // Only an ongoing, fresh confirmation may extend beyond the initial gate.
+    // This does not extend the visible-pose deadline or carry votes across loss.
+    const recentTurn = age <= 220 || (continuingTurn && age <= 600);
+    const turnConflict = !next.mirror && previous && recentTurn && speed > 1.2 && depth && quality >= .8 &&
+      rawChoice !== rotation && raw.angleTo(depth) < .6 &&
+      rawChoice.angleTo(raw) < .6 && rawChoice.angleTo(depth) < .6 &&
       rotation.angleTo(raw)-rawChoice.angleTo(raw) > .25 && rotation.angleTo(depth)-rawChoice.angleTo(depth) > .25;
     if (turnConflict) {
       this.turnEvidence = { rotation:rawChoice.clone(), time, started:continuingTurn?turn.started:time, count:continuingTurn?turn.count+1:1 };

@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { DRACOLoader } from 'three/addons/loaders/DRACOLoader.js';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
-import { estimateWristPose, landmarkPoint, WristPoseTracker, smoothingAlpha, watchRotationDegrees } from './pose.js?v=710';
+import { estimateWristPose, landmarkPoint, WristPoseTracker, smoothingAlpha, watchRotationDegrees } from './pose.js?v=712';
 import { calibrationPrompt } from './initial-calibration.js?v=78';
 import { RearPalmAxis } from './rear-axis.js?v=79';
 import { HandDetector } from './hand-detector.js?v=75';
@@ -421,7 +421,7 @@ $('save-diagnostics').addEventListener('click',()=>{
   if(!diagnosticRecorder.frames.length && !diagnosticRecorder.renders.length)return;
   const time = performance.now(); diagnosticRecorder.stop(time, 'save');
   updateDiagnosticUi(time, true);
-  const blob=new Blob([JSON.stringify(diagnosticRecorder.export(time, {version:'0.7.11',engine,timeOrigin:performance.timeOrigin}))],{type:'application/json'});
+  const blob=new Blob([JSON.stringify(diagnosticRecorder.export(time, {version:'0.7.12',engine,timeOrigin:performance.timeOrigin}))],{type:'application/json'});
   const url=URL.createObjectURL(blob), link=document.createElement('a');link.href=url;link.download='wrist-diagnostics.json';link.click();setTimeout(()=>URL.revokeObjectURL(url),1000);
 });
 $('start').addEventListener('click', () => mode === 'idle' ? startCamera() : stopCamera());

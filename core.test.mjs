@@ -349,6 +349,54 @@ test('a fast rear turn can stop at the palm without inventing continued motion',
   }
   assert.ok(Math.abs(displayed-180)<1);
 });
+
+test('rear turns return without a false revolution when turnaround observations drop or depth is biased',()=>{
+  for(const right of [false,true])for(const heading of [0,Math.PI/2])for(const direction of [-1,1])
+  for(const dt of [33,67,100])for(const bias of [-20,-15,0,15,20])for(const missing of [-1,4,5,6,7]){
+    const {tracker,pose,angle}=rearTurnFixture({right,heading});let time=0,displayed=0;
+    const initial=tracker.previousRotation.clone();
+    const axis=new Vector3(0,1,0).applyAxisAngle(new Vector3(0,0,1),heading);
+    const sequence=[30,60,90,120,150,180,150,120,90,60,30,0,...Array(30).fill(0)];
+    for(let i=0;i<sequence.length;i++){
+      const p=i===missing?null:pose(sequence[i]*direction);
+      if(p){const q=new Quaternion().setFromAxisAngle(axis,bias*Math.PI/180);p.rotation.premultiply(q);p.depthRotation.premultiply(q);}
+      tracker.update(p,time+=dt);displayed=angle(tracker.pose.rotation,displayed);
+      const context=`${right}/${heading}/${direction}/${dt}/${bias}/${missing}/${i}`;
+      assert.ok(Math.abs(displayed)<240,`false displayed turn ${displayed}: ${context}`);
+    }
+    // Accepted orientations may jump exactly 180 degrees after a held gap;
+    // their winding is undefined. Measure winding on the rate-limited display.
+    assert.ok(tracker.previousRotation.angleTo(initial)<1e-6);
+    assert.ok(Math.abs(displayed)<3);
+  }
+});
+
+test('a missed palm-facing turnaround holds the same-angle return instead of inventing a forward step',()=>{
+  const {tracker,pose}=rearTurnFixture();let time=0;
+  for(const a of [30,60,90,120,150])tracker.update(pose(a),time+=67);
+  tracker.update(null,time+=67);
+  const before=tracker.previousRotation.clone(),velocity=tracker.rotationVelocity.clone();
+  assert.equal(tracker.update(pose(150),time+=67),false);
+  assert.ok(tracker.diagnostics.turnPending);
+  assert.ok(tracker.previousRotation.angleTo(before)<1e-8);
+  assert.ok(tracker.rotationVelocity.distanceTo(velocity)<1e-8);
+  tracker.update(pose(120),time+=67);
+  assert.ok(tracker.previousRotation.angleTo(pose(120).rotation)<1e-8);
+  assert.ok(tracker.rotationVelocity.y<=0); // A >180ms acceptance gap clears speed.
+});
+
+test('biased rear evidence cannot reverse a continuing turn from one bad observation or stale memory',()=>{
+  for(const stale of [false,true]){
+    const {tracker,pose}=rearTurnFixture();let time=0;
+    for(const a of [30,60,90,120,150,180])tracker.update(pose(a),time+=67);
+    if(stale){tracker.update(null,time+=300);assert.equal(tracker.sample(time),null);}
+    const bad=pose(210);bad.rotation.copy(pose(165).rotation);bad.depthRotation.copy(pose(165).depthRotation);
+    tracker.update(bad,time+=67);
+    assert.equal(!!tracker.diagnostics.turnRealigned,false);
+    assert.equal(!!tracker.diagnostics.turnPending,!stale);
+    if(!stale){tracker.update(pose(240),time+=67);assert.ok(tracker.previousRotation.angleTo(pose(240).rotation)<1e-8);}
+  }
+});
 test('long-loss recovery accepts the original tilted calibration view',()=>{
   const tracker=new WristPoseTracker();
   for(let t=-1800;t<=0;t+=50)tracker.update(rotationPose(0.25),t);
