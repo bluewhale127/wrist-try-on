@@ -1,13 +1,17 @@
-# Wrist center 05
+# Wrist center 06 — validation experiment
 
-This locally trained model predicts a single 2D wrist contact point. It does not estimate wrist scale, width, handedness, surface, depth, or 3D orientation. The `wrist-watch.html` experiment uses manual size and orientation controls.
+Predicts one 2D wrist contact point. Scale, width, handedness, surface, depth and 3D orientation are not estimated. `wrist-watch.html` provides manual size and orientation controls.
 
-Training: 27 frames from two recordings of one person's wrist, including 15 user-confirmed contact points. Evaluation on these recordings is a training/integration check, not evidence of accuracy on unseen people, cameras, backgrounds or poses. Images and annotation coordinates are not distributed with this runtime.
+Training: 31 frames (27 existing plus 4 from a new environment), including 19 user-confirmed centers. Two additional user-confirmed frames were excluded from training. They share the new recording with training frames and are development checks, not independent tests. Their errors are 31.43 and 25.15 pixels at 406×720. The user accepted these known limitations for experimental deployment. No images or annotation coordinates are published.
 
-Input: RGB float32 NCHW `[1,3,192,192]`, integer box downsampling and letterboxing in `center-preprocess.mjs`. Output: `center_heatmap`, 48×48. Decode a weighted 3×3 neighborhood of the peak. Acceptance threshold: 0.55 (a model score, not a calibrated probability).
+Original/augmented training inputs include mirroring, rotation, center-preserving aspect crops, brightness, contrast, saturation, channel gains, gamma, blur and noise. Background-only training patches include the new scene. Acceptance remains 0.55; it is not a calibrated probability.
 
-Model SHA-256: `36b186fd86e5c866082142228c5805bfe8d3ce4a72957c501f37cc4e9f7e6bdc`.
+The deployed model has a versioned filename `center-net-06.onnx`, loaded by `center-worker-06.mjs`, so old cached model 05 files cannot substitute for it. Model 05 and its worker remain available at their original filenames.
 
-ONNX Runtime Web 1.23.0 is provided under the included MIT license. The inference module and WASM runtime are served locally. Inference runs in a dedicated worker with one WASM thread; no paid API or inference server is required. Camera frames remain in the browser.
+Model 06 SHA-256: `6a7675c798fae61a8ab2e7b355e6d7320db8eb4f3c74ddbfbc7e7c242caaf546`.
 
-The validation page is separate from the existing hand-based application. Stop/restart, seek, and source switching invalidate observations; missing or older-than-350ms observations hide the watch. A newly accepted wrist centre reattaches immediately without hand calibration. Manual controls are stored under `viver-wrist-center-watch-v1`.
+Input: RGB float32 NCHW `[1,3,192,192]`, integer-box downsampling and letterboxing in `center-preprocess.mjs`. Output: `center_heatmap`, 48×48, decoded using a weighted 3×3 peak neighborhood.
+
+ONNX Runtime Web 1.23.0 uses the included MIT license. Inference runs locally in a dedicated single-threaded WASM worker. Camera frames remain in the browser. An explicit diagnostic photo action creates a local download only.
+
+This page is separate from the stable hand-based application. Missing or older-than-350ms observations hide the watch; a new accepted center reattaches without hand calibration. Size and orientation settings use `viver-wrist-center-watch-v1` storage.

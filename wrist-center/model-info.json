@@ -1,9 +1,20 @@
 {
-  "id": "wrist-center-05",
+  "id": "wrist-center-06",
+  "file": "center-net-06.onnx",
   "centerOnly": true,
   "threshold": 0.55,
-  "trainingImages": 27,
-  "userConfirmedCenters": 15,
+  "trainingImages": 31,
+  "userConfirmedTrainingCenters": 19,
+  "relatedDevelopmentCenters": 2,
   "independentTest": false,
-  "modelSha256": "36b186fd86e5c866082142228c5805bfe8d3ce4a72957c501f37cc4e9f7e6bdc"
+  "modelSha256": "6a7675c798fae61a8ab2e7b355e6d7320db8eb4f3c74ddbfbc7e7c242caaf546",
+  "knownLimitations": [
+    "Two related held-out positions have 25-31 pixel error at 406x720.",
+    "Scale and orientation are manual.",
+    "New people/environments and Android camera accuracy remain unverified."
+  ],
+  "legacyModel": {
+    "id": "wrist-center-05",
+    "file": "center-net.onnx"
+  }
 }
