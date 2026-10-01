@@ -10,6 +10,7 @@ import { RearWristAssist, rearObservation } from './rear-assist.js?v=75';
 import { HandTarget } from './hand-target.js?v=73';
 import { makeSampleWatch, disposeModel, inspectGLB } from './watch.js?v=74';
 import { WristRig, wristDimensions } from './wrist-rig.js?v=71';
+import { DiagnosticRecorder } from './diagnostic-recorder.js?v=711';
 
 import { FIT_CONTROLS, FitSettings, defaultFit } from './fit-settings.js?v=7';
 
@@ -30,7 +31,10 @@ const rearAxis = new RearPalmAxis();
 const rearEnabled = () => !mirror && $('rear-assist').checked;
 const rearAxisEnabled = () => !mirror && $('rear-axis').checked;
 const debugCanvas = $('tracking-debug'), debugContext = debugCanvas.getContext('2d');
-let debugFrame = null, diagnosticRecords = [];
+let debugFrame = null;
+const diagnosticRecorder = new DiagnosticRecorder();
+const renderedCaseRotation = new THREE.Quaternion();
+let lastDiagnosticUiTime = -Infinity;
 const renderCenter = new THREE.Vector3();
 let renderRadius = 0, renderSize = 0;
 let poseInitialized = false, lastDetection = 0, lastVideoTime = -1, detecting = false;
@@ -38,6 +42,29 @@ let width = 1, height = 1, animationId, previousFrame = performance.now();
 let fpsStart = 0, detections = 0, modelOperation = 0;
 let inferenceInterval = 33;
 const reduceMotion = matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+function diagnosticContext() {
+  return { mode, operation, mirror, facingMode, orientationSign: tracker.orientationSign,
+    watchOrientationSign: tracker.watchOrientationSign, template: tracker.template?.map(p => p.toArray()),
+    selectedRotation: tracker.previousRotation?.toArray(), rotationVelocity: tracker.rotationVelocity.toArray(),
+    view: { width, height, videoWidth: video.videoWidth, videoHeight: video.videoHeight },
+    fit: fit(), rearAssistEnabled: rearEnabled(), rearAxisEnabled: rearAxisEnabled() };
+}
+function diagnosticEvent(type, detail = {}) {
+  diagnosticRecorder.event(performance.now(), type, { ...diagnosticContext(), ...detail });
+}
+function updateDiagnosticUi(time = performance.now(), force = false) {
+  if (!force && time - lastDiagnosticUiTime < 250) return;
+  lastDiagnosticUiTime = time;
+  const s = diagnosticRecorder.summary(time);
+  $('record-diagnostics').textContent = s.active ? '진단 기록 중지' : s.frames || s.renderSamples ? '진단 기록 이어서' : '진단 기록 시작';
+  $('record-diagnostics').disabled = s.full;
+  $('clear-diagnostics').disabled = s.active || !(s.frames || s.renderSamples);
+  $('save-diagnostics').disabled = !(s.frames || s.renderSamples);
+  const state = s.active ? '기록 중' : s.full ? '기록 한도 도달 · 저장해 주세요' : s.frames || s.renderSamples ? '기록 멈춤' : '진단 기록 꺼짐';
+  $('recording-status').textContent = `${state} · 관측 ${s.frames}개 · 시계 표시 ${s.visibleWatchSamples}개 · ${Math.floor(s.durationMs / 1000)}초 / 120초`;
+  $('recording-help').textContent = s.visibleWatchSamples ? '시계 본체의 표시 기록이 포함돼 있어요. 문제가 생기면 바로 저장해 주세요.' : '시계 표시가 0개면 본체가 붙은 구간이 아직 기록되지 않았어요.';
+}
 
 function notice(message, isError = false) {
   if (isError) { errorBox.hidden = false; errorBox.textContent = message; }
@@ -72,6 +99,7 @@ function resetFit() {
   applyFit(defaults); $('wrist-guide').checked = false; saveFit();
 }
 function updateMode(next) {
+  diagnosticEvent('tracking-reset', { reason: 'camera-mode', nextMode: next });
   mode = next;
   stage.classList.toggle('live', next !== 'idle' && !!mediaStream);
   stage.classList.remove('tracked');
@@ -88,7 +116,6 @@ function updateMode(next) {
   $('rear-axis').disabled = next === 'loading' || (next === 'live' && mirror);
   debugFrame = null; debugContext.clearRect(0, 0, width, height);
   if (next === 'idle') $('debug-info').textContent = '카메라가 꺼졌습니다. 남아 있는 진단 기록은 저장할 수 있어요.';
-  if (next === 'loading') { diagnosticRecords = []; $('save-diagnostics').disabled = true; }
 }
 function stopCamera(message = '카메라를 껐습니다. 시계 모델을 계속 살펴볼 수 있어요.') {
   operation++;
@@ -201,15 +228,18 @@ async function detect(time) {
       if(rearAxisEnabled() && rearAxis.diagnostics)$('debug-info').textContent+=`\n팔 기울기 보정 ${Math.round(rearAxis.diagnostics.correction*180/Math.PI)}° · ${rearAxis.diagnostics.trusted?'관절 확인됨':'확인 중'}`;
       if(!tracker.orientationSign)$('debug-info').textContent+=`\n초기 기준: ${calibrationPrompt(d)}`;
       if(assistEnabled)$('debug-info').textContent+=`\n후면 보조: ${rearAssist.diagnostics.state} · ${rearAssist.diagnostics.reason} · ${Math.round(assistMs)}ms`;
-      diagnosticRecords.push({ time, elapsed: completed-time, inferenceMs: elapsed, backend: handLandmarker.backend,
+    }
+    if (diagnosticRecorder.active) {
+      diagnosticRecorder.recordFrame({ time, completedTime: completed, operation, accepted,
+        elapsed: completed-time, inferenceMs: elapsed, backend: handLandmarker.backend,
         rearAssist:assistEnabled?{...rearAssist.diagnostics,observation,processingMs:assistMs}:null,
         rearAxis:rearAxisEnabled()?rearAxis.diagnostics:null, displayRotation:displayPose?.rotation.toArray(),
         view:{width,height,videoWidth:video.videoWidth,videoHeight:video.videoHeight}, mirror, fit:values,
         landmarks,worldLandmarks,handedness:selected === null ? null : result.handedness?.[selected],
         target:{state:handTarget.state,index:selected,detected:result.landmarks?.length || 0},
-        diagnostic:d, orientationSign:tracker.orientationSign, watchOrientationSign:tracker.watchOrientationSign, caseRotationDegrees:watchRotationDegrees(values.rotation,tracker.watchOrientationSign), rawRotation:next?.rotation.toArray(), rotation:tracker.pose?.rotation.toArray(),position:tracker.pose?.position.toArray() });
-      if(diagnosticRecords.length>600)diagnosticRecords.shift();
-      $('save-diagnostics').disabled = false;
+        diagnostic:tracker.diagnostics, orientationSign:tracker.orientationSign, watchOrientationSign:tracker.watchOrientationSign,
+        template:tracker.template?.map(p=>p.toArray()), selectedRotation:tracker.previousRotation?.toArray(), rotationVelocity:tracker.rotationVelocity.toArray(),
+        depthRotation:next?.depthRotation?.toArray(), caseRotationDegrees:watchRotationDegrees(values.rotation,tracker.watchOrientationSign), rawRotation:next?.rotation.toArray(), rotation:tracker.pose?.rotation.toArray(),position:tracker.pose?.position.toArray() }, completed);
     }
   } catch (error) {
     if (id === operation && mode === 'live') { stopCamera(); notice('손 추적이 중단되었습니다. 카메라를 다시 시작해 주세요.', true); console.error(error); }
@@ -251,6 +281,15 @@ function render(time) {
     occluder.visible = $('occlusion').checked;
   }
   renderer.render(scene, camera);
+  if (diagnosticRecorder.active) {
+    const watchVisible = mode === 'live' && anchor.visible;
+    diagnosticRecorder.recordRender({ time, mode, operation, watchVisible, inferenceTime: debugFrame?.time ?? null,
+      orientationSign: tracker.orientationSign, state: tracker.diagnostics.state, mirror,
+      anchorRotation: watchVisible ? anchor.quaternion.toArray() : null,
+      caseWorldRotation: watchVisible ? adjustment.getWorldQuaternion(renderedCaseRotation).toArray() : null,
+      position: watchVisible ? anchor.position.toArray() : null });
+  }
+  updateDiagnosticUi(time);
   drawDiagnostics(time);
 }
 
@@ -333,6 +372,7 @@ try {
   anchor = new WristRig(); adjustment = anchor.caseMount; occluder = anchor.occluder;
   scene.add(anchor); replaceModel(makeSampleWatch()); updateFit();
   new ResizeObserver(() => {
+    diagnosticEvent('tracking-reset', { reason: 'stage-resize', nextView: { width: stage.clientWidth, height: stage.clientHeight } });
     ({ width, height } = stage.getBoundingClientRect());
     renderer.setSize(width, height, false);
     debugCanvas.width = Math.round(width); debugCanvas.height = Math.round(height);
@@ -347,6 +387,7 @@ try {
 applyFit(fitSettings.load(engine, modelKey));
 for (const id of controls) $(id).addEventListener('input', () => { rearAssist.reset(); rearAxis.reset(); updateFit(); saveFit(); });
 $('rear-assist').addEventListener('change',()=>{
+  diagnosticEvent('tracking-reset', { reason: 'rear-assist-setting' });
   operation++;rearAssist.reset();tracker.reset(); rearAxis.reset();handTarget.reset();poseInitialized=false;
   notice('후면 추적 설정을 바꿨어요. 손등과 손가락을 보여 기준을 다시 맞춰 주세요.');
 });
@@ -354,19 +395,33 @@ $('occlusion').addEventListener('change', saveFit);
 $('rear-axis').addEventListener('change',()=>{rearAxis.reset();rearAssist.reset();});
 $('reset').addEventListener('click', resetFit);
 $('align-dial').addEventListener('click', () => {
+  diagnosticEvent('tracking-reset', { reason: 'align-dial' });
   $('rotation').value = 90; $('tilt-x').value = 0; $('tilt-y').value = 0;
   updateFit(); saveFit();
   if (mode === 'live') { operation++; tracker.reset(); rearAxis.reset(); handTarget.reset(); rearAssist.reset(); poseInitialized = false; }
   notice('6시는 엄지, 12시는 새끼손가락 쪽으로 맞춥니다. 카메라에 손등과 손가락을 펴고 약 2초 동안 움직이지 않고 유지해 주세요.');
 });
 $('calibrate').addEventListener('click', () => {
+  diagnosticEvent('tracking-reset', { reason: 'calibrate-button' });
   operation++;
   tracker.reset(); rearAxis.reset(); handTarget.reset(); rearAssist.reset(); poseInitialized = false;
   notice('손등과 손가락을 카메라 쪽으로 펴고 약 2초 동안 움직이지 않고 유지해 주세요. 손의 기준 형태와 회전을 다시 맞춥니다.');
 });
+$('record-diagnostics').addEventListener('click', () => {
+  const time = performance.now();
+  if (diagnosticRecorder.active) diagnosticRecorder.stop(time);
+  else diagnosticRecorder.start(time, diagnosticContext());
+  updateDiagnosticUi(time, true);
+});
+$('clear-diagnostics').addEventListener('click', () => {
+  if (diagnosticRecorder.active) return;
+  diagnosticRecorder.clear(); updateDiagnosticUi(performance.now(), true);
+});
 $('save-diagnostics').addEventListener('click',()=>{
-  if(!diagnosticRecords.length)return;
-  const blob=new Blob([JSON.stringify({version:'0.7.10',engine,recordedAt:new Date().toISOString(),frames:diagnosticRecords})],{type:'application/json'});
+  if(!diagnosticRecorder.frames.length && !diagnosticRecorder.renders.length)return;
+  const time = performance.now(); diagnosticRecorder.stop(time, 'save');
+  updateDiagnosticUi(time, true);
+  const blob=new Blob([JSON.stringify(diagnosticRecorder.export(time, {version:'0.7.11',engine,timeOrigin:performance.timeOrigin}))],{type:'application/json'});
   const url=URL.createObjectURL(blob), link=document.createElement('a');link.href=url;link.download='wrist-diagnostics.json';link.click();setTimeout(()=>URL.revokeObjectURL(url),1000);
 });
 $('start').addEventListener('click', () => mode === 'idle' ? startCamera() : stopCamera());
