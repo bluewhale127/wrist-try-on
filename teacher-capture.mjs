@@ -2,7 +2,7 @@ import {Vector3} from './vendor/three/three.module.js';
 import {teacherAxesLabel} from './watch-teacher-axes.mjs';
 import {defaultFit} from './fit-settings.js';
 
-export const CAPTURE_VERSION='teacher-01';
+export const CAPTURE_VERSION='teacher-02';
 export const TEACHER_FIT=Object.freeze(defaultFit('hand','datejust'));
 export const LIMITS={frames:300,bytes:80*1024*1024,totalBytes:200*1024*1024,intervalMs:334};
 
@@ -37,7 +37,7 @@ export function frameLabel({pose,basePose=pose,rearAxis=null,raw,selectedRotatio
 // Landmarks are not segmentation: these crops still require visual review.
 export function wristCrop(label,landmarks){
   const [width,height]=label.imageSize,[cx,cy]=label.wristAnchor2d;
-  for(const factor of [1.8,1.5,1.25,1]){
+  for(const factor of [2.8,2.5,2.2,2,1.8,1.5,1.25,1]){
     const side=Math.round(label.widthPixels*factor);
     if(side<48)continue;
     const x=Math.round(cx-side/2),y=Math.round(cy-side/2),margin=side*.06;
@@ -71,4 +71,35 @@ export class CaptureGate {
     if(time-this.lastSave<LIMITS.intervalMs)return {reason:'cadence'};
     this.lastSave=time;return result;
   }
+}
+
+// A scene tag is a user's filming intention, never a measured orientation.
+// Review images deliberately have no usable target center or axes.
+export function reviewLabel({reason,scene,time,width,height,evidence}){
+  return {schema:CAPTURE_VERSION,kind:'review',reason,scene,frameTimeMs:time,imageSize:[width,height],
+    axes:null,center2d:null,reviewed:false,approvedForTraining:false,
+    evidence:{...structuredClone(evidence),trusted:false}};
+}
+
+export class CollectionGate {
+  constructor(){this.reset();}
+  reset(){this.hasReference=false;this.lastSave=-Infinity;}
+  consider(candidate,{calibrated,scene,time}){
+    this.hasReference ||= calibrated;
+    if(!this.hasReference||time-this.lastSave<LIMITS.intervalMs)return null;
+    if(scene!=='side'&&!candidate.label&&candidate.reason==='cadence')return null;
+    this.lastSave=time;
+    return scene==='side'?{kind:'review',reason:'side-review'}:
+      candidate.label?{kind:'label'}:{kind:'review',reason:candidate.reason||'tracking'};
+  }
+}
+
+export class CaptureTrace {
+  constructor(limit=1800){this.limit=limit;this.samples=[];this.rejected={};this.observations=0;}
+  add(sample){
+    this.observations++;
+    if(sample.reason!=='saved'&&sample.reason!=='eligible'&&sample.reason!=='cadence')this.rejected[sample.reason]=(this.rejected[sample.reason]||0)+1;
+    this.samples.push(structuredClone(sample));if(this.samples.length>this.limit)this.samples.shift();
+  }
+  summary(){return {observations:this.observations,rejected:{...this.rejected},trace:structuredClone(this.samples),traceTruncated:this.observations>this.limit};}
 }

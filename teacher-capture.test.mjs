@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {Vector3,Quaternion} from './vendor/three/three.module.js';
 import {WristPoseTracker,estimateWristPose} from './pose.js';
 import {WristRig,wristDimensions} from './wrist-rig.js';
-import {frameLabel,wristCrop,CaptureGate,TEACHER_FIT} from './teacher-capture.mjs';
+import {frameLabel,wristCrop,CaptureGate,CollectionGate,CaptureTrace,reviewLabel,TEACHER_FIT} from './teacher-capture.mjs';
 import {crc32,makeZip,sessionArchive} from './teacher-store.mjs';
 function example(){
   const points=Array.from({length:21},()=>({x:.5,y:.2,z:0}));
@@ -71,4 +71,46 @@ test('ZIP has correct CRC, UTF-8 filenames and image-label file mapping',async()
   const archive=await sessionArchive({id:'test',count:1},[{index:0,label:{center2d:[10,20]},image:new Blob(['frame']),cropImage:new Blob(['crop'])}]);
   const text=await archive.text();assert.ok(text.includes('frames/00000.jpg'));assert.ok(text.includes('crops/00000.jpg'));assert.ok(text.includes('manifest.json'));
   await assert.rejects(makeZip([['../bad','bad']]));
+});
+
+test('side scenes never become axis labels, even when teacher accepts; loss remains recordable',()=>{
+  const g=new CollectionGate(),r=frameLabel(example());
+  assert.equal(g.consider({reason:'calibration'},{calibrated:false,scene:'side',time:0}),null);
+  assert.deepEqual(g.consider(r,{calibrated:true,scene:'side',time:100}),{kind:'review',reason:'side-review'});
+  assert.equal(g.consider(r,{calibrated:true,scene:'normal',time:200}),null);
+  assert.deepEqual(g.consider({reason:'tracking'},{calibrated:false,scene:'normal',time:500}),{kind:'review',reason:'tracking'});
+  assert.deepEqual(g.consider(r,{calibrated:true,scene:'normal',time:900}),{kind:'label'});
+  g.reset();assert.equal(g.consider({reason:'tracking'},{calibrated:false,scene:'normal',time:1500}),null);
+});
+test('review evidence cannot populate targets and is cloned at image timestamp',()=>{
+  const evidence={teacherLandmarks:[{x:.1}],selectedRotation:[0,0,0,1]};
+  const label=reviewLabel({reason:'tracking',scene:'side',time:123,width:720,height:720,evidence});
+  evidence.teacherLandmarks[0].x=.9;
+  assert.equal(label.evidence.teacherLandmarks[0].x,.1);assert.equal(label.evidence.trusted,false);
+  assert.equal(label.axes,null);assert.equal(label.center2d,null);assert.equal(label.approvedForTraining,false);
+});
+test('trace includes final unsaved failures with bounded history and complete counters',()=>{
+  const trace=new CaptureTrace(2);
+  for(const reason of ['saved','tracking','uncertain','tracking'])trace.add({reason});
+  const summary=trace.summary();assert.equal(summary.observations,4);assert.equal(summary.trace.length,2);
+  assert.deepEqual(summary.rejected,{tracking:2,uncertain:1});assert.equal(summary.traceTruncated,true);
+  summary.trace[0].reason='mutated';assert.equal(trace.summary().trace[0].reason,'uncertain');
+});
+test('mixed archive separates rejected images from training candidates and preserves legacy exports',async()=>{
+  const records=[{index:0,image:new Blob(['a']),label:{kind:'label',axes:{front:[0,0,1]}}},
+    {index:1,image:new Blob(['b']),label:{kind:'review',axes:{bad:true},center2d:[1,2],approvedForTraining:true}},
+    {index:2,image:new Blob(['c']),label:{kind:'label'}}];
+  const zip=await sessionArchive({version:'teacher-02',count:3},records);
+  const bytes=new Uint8Array(await zip.arrayBuffer()),v=new DataView(bytes.buffer);let manifest;
+  for(let offset=0;v.getUint32(offset,true)===0x04034b50;){
+    const size=v.getUint32(offset+18,true),n=v.getUint16(offset+26,true),extra=v.getUint16(offset+28,true),start=offset+30+n+extra;
+    const name=new TextDecoder().decode(bytes.slice(offset+30,offset+30+n));
+    if(name==='manifest.json')manifest=JSON.parse(new TextDecoder().decode(bytes.slice(start,start+size)));
+    offset=start+size;
+  }
+  assert.equal(manifest.frames.length,2);assert.equal(manifest.frames[1].index,1);assert.equal(manifest.frames[1].recordIndex,2);
+  assert.equal(manifest.reviewFrames[0].axes,null);assert.equal(manifest.reviewFrames[0].approvedForTraining,false);
+  assert.equal(manifest.reviewFrames[0].image,'review/00001.jpg');assert.deepEqual(manifest.recordCounts,{total:3,labeled:2,review:1});
+  const legacy=await sessionArchive({version:'teacher-01',count:1},[records[0]]);
+  assert.ok((await legacy.text()).includes('"schema": "teacher-01"'));
 });

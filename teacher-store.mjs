@@ -1,4 +1,4 @@
-import {LIMITS,CAPTURE_VERSION} from './teacher-capture.mjs';
+import {LIMITS,CAPTURE_VERSION} from './teacher-capture.mjs?v=2';
 const request=r=>new Promise((resolve,reject)=>{r.onsuccess=()=>resolve(r.result);r.onerror=()=>reject(r.error);});
 const complete=tx=>new Promise((resolve,reject)=>{tx.oncomplete=resolve;tx.onabort=()=>reject(tx.error||Error('Storage transaction aborted'));tx.onerror=()=>{};});
 
@@ -15,7 +15,7 @@ export async function openTeacherStore(name='wrist-teacher-01'){
 class TeacherStore {
   constructor(db){this.db=db;}
   async create(meta){
-    const session={...meta,id:crypto.randomUUID(),version:CAPTURE_VERSION,createdAt:new Date().toISOString(),count:0,crops:0,bytes:0};
+    const session={...meta,id:crypto.randomUUID(),version:CAPTURE_VERSION,createdAt:new Date().toISOString(),count:0,labeled:0,review:0,crops:0,bytes:0};
     const tx=this.db.transaction('sessions','readwrite'),done=complete(tx);tx.objectStore('sessions').add(session);await done;return session;
   }
   async sessions(){return (await request(this.db.transaction('sessions').objectStore('sessions').getAll())).sort((a,b)=>b.createdAt.localeCompare(a.createdAt));}
@@ -30,11 +30,17 @@ class TeacherStore {
         const bytes=record.image.size+(record.cropImage?.size||0)+new Blob([JSON.stringify(record.label)]).size;
         if(!session)throw Error('Session missing');
         if(session.count>=LIMITS.frames||session.bytes+bytes>LIMITS.bytes||sessions.reduce((n,v)=>n+v.bytes,0)+bytes>LIMITS.totalBytes)throw Error('저장 한도에 도달했어요. 먼저 파일을 내보내 주세요.');
-        updated={...session,count:session.count+1,crops:session.crops+(record.cropImage?1:0),bytes:session.bytes+bytes};
+        const review=record.label.kind==='review';
+        updated={...session,count:session.count+1,labeled:(session.labeled??session.count)+(review?0:1),review:(session.review||0)+(review?1:0),crops:session.crops+(record.cropImage?1:0),bytes:session.bytes+bytes};
         tx.objectStore('frames').add({...record,sessionId:id,index:session.count});s.put(updated);
       }catch(e){failure=e;tx.abort();}
     };
     try{await done;}catch(e){throw failure||e;}return updated;
+  }
+  async updateSummary(id,summary){
+    const tx=this.db.transaction('sessions','readwrite'),done=complete(tx),s=tx.objectStore('sessions'),r=s.get(id);
+    r.onsuccess=()=>{if(r.result)s.put({...r.result,summary});};
+    await done;
   }
   async delete(id){
     const tx=this.db.transaction(['sessions','frames'],'readwrite'),done=complete(tx);
@@ -70,12 +76,16 @@ export async function makeZip(files){
 }
 
 export async function sessionArchive(session,records){
-  const files=[],frames=records.map(r=>{
-    const stem=String(r.index).padStart(5,'0'),image=`frames/${stem}.jpg`,cropImage=r.cropImage?`crops/${stem}.jpg`:null;
+  const files=[],frames=[],reviewFrames=[];
+  for(const r of records){
+    const review=r.label.kind==='review',destination=review?reviewFrames:frames;
+    const stem=String(r.index).padStart(5,'0'),image=`${review?'review':'frames'}/${stem}.jpg`,cropImage=!review&&r.cropImage?`crops/${stem}.jpg`:null;
     files.push([image,r.image]);if(cropImage)files.push([cropImage,r.cropImage]);
-    return {index:r.index,image,cropImage,...r.label};
-  });
-  files.push(['manifest.json',JSON.stringify({schema:CAPTURE_VERSION,session,frames},null,2)]);
+    destination.push({...r.label,index:destination.length,recordIndex:r.index,image,cropImage,
+      ...(review?{axes:null,center2d:null,approvedForTraining:false}:{})});
+  }
+  files.push(['manifest.json',JSON.stringify({schema:session.version||'teacher-01',session,recordCounts:{total:records.length,labeled:frames.length,review:reviewFrames.length},frames,reviewFrames},null,2)]);
+  files.push(['REVIEW.txt','reviewFrames are diagnostic images, NOT training labels. axes and center2d are null.\nAny evidence contains untrusted teacher estimates only. The side scene tag is user-selected, not a measured angle.\nSession summary includes rejected observations even after the last saved image; the trace is bounded.\n']);
   files.push(['README.txt','Teacher pseudo-labels, not independent ground truth. No student training has been run.\nImages and labels share one captured, unmirrored source frame. Pixel coordinates refer to imageSize.\n+Y=twelve, -Y=six, +Z=dial outward, -Z=opposite dial normal, +X=three. Camera +X right, +Y up, +Z toward camera.\ncenter2d is the projected GLB case-contact origin. Z is relative renderer depth, NOT measured camera distance.\nReview wrist centers, rotations, and candidate crops before training. A crop excludes predicted hand landmarks, not a verified segmentation.\nSplit evaluation by recording session/person/environment, not adjacent frames.\n']);
   return makeZip(files);
 }
