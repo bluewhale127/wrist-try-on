@@ -9,7 +9,7 @@
     "prestart": "npm run assets",
     "start": "node serve.mjs",
     "pretest": "npm run assets",
-    "test": "node --test core.test.mjs fit-settings.test.mjs rear-assist.test.mjs rear-axis.test.mjs diagnostic-recorder.test.mjs watch-model.test.mjs occlusion.test.mjs wrist-watch.test.mjs",
+    "test": "node --test core.test.mjs fit-settings.test.mjs rear-assist.test.mjs rear-axis.test.mjs diagnostic-recorder.test.mjs watch-model.test.mjs occlusion.test.mjs wrist-watch.test.mjs wrist-glb.test.mjs",
     "build": "node build.mjs"
   },
   "dependencies": {

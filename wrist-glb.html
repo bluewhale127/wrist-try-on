@@ -1,0 +1,31 @@
+<!doctype html><html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>VIVER · 모바일 GLB 착용 실험</title><link rel="icon" href="data:,">
+<script type="importmap">{"imports":{"three":"./vendor/three/three.module.js","three/addons/":"./vendor/three/addons/"}}</script>
+<style>
+*{box-sizing:border-box}[hidden]{display:none!important}body{margin:0;background:#101820;color:#eef5f3;font:15px system-ui,sans-serif}main{max-width:1120px;padding:24px;margin:auto}h1{font-size:28px;letter-spacing:-.04em;margin:8px 0 10px}h2{font-size:18px;margin:0 0 12px}.eyebrow{font-size:12px;letter-spacing:.14em;color:#9ce5ce}p{color:#aec5cc;line-height:1.6;margin:8px 0 16px}.layout{display:grid;grid-template-columns:minmax(0,1.4fr) minmax(300px,1fr);gap:24px}.stage{position:relative;height:650px;max-height:73vh;min-height:420px;background:#091014;border:1px solid #30434b;border-radius:16px;overflow:hidden}.stage img,.stage video,.stage canvas{position:absolute;inset:0;width:100%;height:100%;object-fit:contain}.mirror{transform:scaleX(-1)}.badge{position:absolute;top:12px;left:12px;right:12px;background:#0f242bea;padding:10px 12px;border-radius:9px;font-size:13px;pointer-events:none}.settings{border:1px solid #30434b;border-radius:16px;padding:20px;background:#16232c;align-self:start}button,select,input[type=file]{font:inherit}button,select{color:#eef5f3;border:1px solid #37545d;border-radius:8px;padding:10px 12px;background:#1a313a}button{cursor:pointer}button:disabled{opacity:.45;cursor:wait}.primary{background:#98dfc9;color:#0d2822;font-weight:650}.actions{display:flex;gap:8px;flex-wrap:wrap;margin:12px 0}.check{display:flex;align-items:center;gap:8px;margin:14px 0}label.slider{display:flex;justify-content:space-between;margin:16px 0 0;font-size:14px}input[type=range]{width:100%;accent-color:#98dfc9;margin-top:9px}output{color:#a7e9d6;font-variant-numeric:tabular-nums}.small{font-size:12px}.error{color:#ffaf9e}select{width:100%;margin-bottom:12px}details{margin-top:16px;padding-top:14px;border-top:1px solid #30434b}summary{cursor:pointer}input[type=file]{display:block;max-width:100%;margin:12px 0}.foot{font-size:12px;margin-top:24px}pre{font-size:11px;white-space:pre-wrap;max-height:240px;overflow:auto}#model-status{color:#97e2c8}#metrics{min-height:18px;font-size:12px}@media(max-width:760px){main{padding:16px}.layout{grid-template-columns:1fr}.stage{height:64vh;min-height:380px}.settings{padding:16px}}
+</style></head><body><main>
+<div class="eyebrow">VIVER / GLB LAB · FIT 03</div><h1>실제 시계, 손목에 올려보기</h1>
+<p>카메라를 켜고 손목을 보여 주세요. 크기와 화면 방향은 자동으로 맞춰보되, 입체 회전은 직접 조절해 보세요.</p>
+<div class="layout"><section>
+<div id="stage" class="stage"><img id="photo" hidden alt="GLB 착용을 확인할 손목 사진"><video id="video" muted playsinline hidden></video><canvas id="scene" aria-label="Datejust GLB 착용 화면"></canvas><canvas id="marks" aria-hidden="true"></canvas><div class="badge" id="badge">시계와 손목 모델 준비 중</div></div>
+<div class="actions"><button id="start" class="primary" disabled>카메라 켜기</button><button id="switch" disabled>카메라 전환</button><button id="stop" disabled>정지</button><button id="pause" disabled>영상 일시정지</button></div>
+<p id="status" role="status">GLB와 손목 기준 모델을 불러오고 있어요.</p><p id="metrics"></p>
+<details><summary>내 사진·영상으로 확인</summary><label for="media" class="small">이 기기의 이미지 또는 영상</label><input id="media" type="file" accept="image/*,video/*" disabled><p class="small">파일과 카메라 영상은 이 브라우저 안에서 처리됩니다.</p></details>
+</section><aside class="settings"><h2>시계 맞추기</h2><p id="model-status" class="small">Datejust GLB · 불러오는 중</p>
+<label class="check"><input id="auto" type="checkbox" checked>인식한 너비·평면 방향 적용</label><p id="fit-status" class="small">손목 기준을 확인하는 중입니다.</p>
+<label class="slider" for="scale">시계 크기 <output id="scale-output"></output></label><input id="scale" type="range" min=".3" max="1.6" step=".01" value="1">
+<label class="slider" for="roll">손목 비틀림 <output id="roll-output"></output></label><input id="roll" type="range" min="-180" max="180" step="1" value="0">
+<label class="slider" for="tilt">손목 기울기 <output id="tilt-output"></output></label><input id="tilt" type="range" min="-80" max="80" step="1" value="0">
+<label class="slider" for="heading">수동 팔 방향 <output id="heading-output"></output></label><input id="heading" type="range" min="-180" max="180" step="1" value="0">
+<label class="slider" for="dial">수동 다이얼 방향 <output id="dial-output"></output></label><input id="dial" type="range" min="-180" max="180" step="1" value="90">
+<p class="small">자동 기준이 없으면 수동 팔·다이얼 방향을 사용합니다. 비틀림과 기울기는 자동 추정하지 않습니다.</p>
+<div class="actions"><button id="front">정면으로</button><button id="reset">조절 초기화</button></div>
+<details><summary>스트랩 가림·손목 두께</summary>
+<label class="slider" for="width">손목 너비 보정 <output id="width-output"></output></label><input id="width" type="range" min=".65" max="1.6" step=".01" value="1">
+<label class="slider" for="depth">손목 두께 보정 <output id="depth-output"></output></label><input id="depth" type="range" min=".4" max="1.8" step=".01" value="1">
+<label class="slider" for="height">피부 위 높이 <output id="height-output"></output></label><input id="height" type="range" min="-.2" max=".6" step=".01" value="0">
+<label class="check"><input id="occlusion" type="checkbox" checked>손목 뒤 스트랩 가리기</label><label class="check"><input id="guide" type="checkbox">손목 원기둥 표시</label></details>
+<label class="check"><input id="show-marks" type="checkbox">A(12시) · B(6시) · C 표시</label><label class="check"><input id="mirror" type="checkbox">거울 화면으로 보기</label>
+<details><summary>다른 GLB 불러오기</summary><input id="model-file" type="file" accept=".glb,model/gltf-binary"><button id="datejust">Datejust 다시 불러오기</button><p class="small">모델의 원점·축이 다르면 별도 정렬이 필요할 수 있습니다.</p></details>
+</aside></div><p class="foot">휴대폰 착용 실험입니다. 새 환경의 자동 정렬은 아직 불안정하며, 사진의 너비는 실제 손목 치수와 다를 수 있습니다. 금속 스트랩 모양은 GLB에 들어 있는 형태를 사용합니다.</p>
+<details><summary>현재 표시 상태</summary><pre id="diagnostic"></pre></details>
+</main><script type="module" src="./wrist-glb.mjs?v=1"></script></body></html>
