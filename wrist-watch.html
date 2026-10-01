@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>VIVER · 손목으로 바로 착용</title>
+<link rel="icon" href="data:,">
+<script type="importmap">{"imports":{"three":"./vendor/three/three.module.js","three/addons/":"./vendor/three/addons/"}}</script>
+<style>
+*{box-sizing:border-box}[hidden]{display:none!important}body{margin:0;background:#101820;color:#edf5f4;font-family:system-ui,sans-serif}main{max-width:1040px;margin:auto;padding:20px 16px 36px}.eyebrow{font-size:12px;letter-spacing:.12em;color:#8be2c8}h1{font-size:26px;margin:8px 0}h2{font-size:18px;margin:0 0 16px}p{line-height:1.6;color:#afc2c9}a{color:#92e8cd}.intro{font-size:14px;margin:8px 0 18px}.layout{display:grid;grid-template-columns:minmax(0,1.25fr) minmax(290px,1fr);gap:24px}.stage{position:relative;height:65vh;min-height:340px;max-height:740px;background:#080e13;border-radius:16px;border:1px solid #2b434b;overflow:hidden}video,#scene,#center-mark{position:absolute;inset:0;width:100%;height:100%;object-fit:contain}.mirror{transform:scaleX(-1)}.placeholder{position:absolute;inset:0;display:grid;place-items:center;text-align:center;padding:30px;color:#afc2c9;pointer-events:none}.badge{position:absolute;top:12px;left:12px;right:12px;background:#10272dda;border-radius:9px;padding:10px 12px;font-size:13px;pointer-events:none}.actions{display:flex;gap:8px;flex-wrap:wrap;margin:12px 0}button,.file{font:inherit;border:1px solid #36535e;color:#eaf5f1;background:#1a303b;border-radius:9px;padding:11px 13px;cursor:pointer}button.primary{background:#88e2c7;color:#102c28;font-weight:650}button:disabled,.file:has(input:disabled){opacity:.45;cursor:default}.settings{padding:20px;border:1px solid #2b434b;border-radius:16px;background:#142029;align-self:start}label.slider{display:flex;justify-content:space-between;gap:12px;font-size:14px;margin-top:17px}output{color:#92e8cd;font-variant-numeric:tabular-nums}input[type=range]{width:100%;accent-color:#88e2c7;margin:12px 0 0}.small{font-size:12px;margin:8px 0;color:#9fb6bd}.check{display:flex;align-items:center;gap:8px;font-size:14px;margin:16px 0}details{border-top:1px solid #2b434b;margin-top:20px;padding-top:16px}summary{cursor:pointer}.message{font-size:14px;min-height:24px;line-height:1.6}.error{color:#ffb0ad}.file{display:block;font-size:13px;margin:12px 0}input[type=file]{display:block;max-width:100%;margin-top:8px}.foot{font-size:12px;color:#78979f;margin-top:24px}#metrics{font-size:12px;min-height:18px;font-variant-numeric:tabular-nums}@media(max-width:720px){.layout{grid-template-columns:1fr}.stage{height:62vh;max-height:660px}.settings{padding:16px}h1{font-size:23px}} 
+</style></head><body><main>
+<div class="eyebrow">VIVER / WRIST CENTER 05 · 착용 실험 01</div>
+<h1>손목으로 바로 착용</h1>
+<p class="intro">손목을 보여 주세요. 위치는 자동으로 따라가고, 크기와 방향은 아래에서 맞출 수 있어요.</p>
+<div class="layout"><section>
+<div class="stage" id="stage"><video id="camera" muted playsinline></video><canvas id="scene" aria-label="3D 시계"></canvas><canvas id="center-mark" aria-hidden="true"></canvas><div id="placeholder" class="placeholder">카메라를 켜고 손목을 보여 주세요.<br>손가락을 펼쳐서 시작할 필요는 없어요.</div><div id="badge" class="badge">손목 모델 준비 중</div></div>
+<div class="actions"><button class="primary" id="start" disabled>카메라 켜기</button><button id="switch" disabled>카메라 전환</button><button id="stop" disabled>끄기</button></div>
+<div id="status" class="message" role="status" aria-live="polite">손목 모델과 시계를 준비하고 있어요.</div><p id="metrics" class="small"></p>
+<details><summary>내 영상으로 확인</summary><label class="file">기기에 있는 영상<input id="file" type="file" accept="video/*" disabled></label><p class="small">영상은 이 브라우저에서 처리해요.</p><label class="check"><input type="checkbox" id="show-center">인식한 중심점 보기</label></details>
+</section><aside class="settings">
+<h2>크기와 방향 맞추기</h2><p class="small">카메라와의 거리를 바꾸거나 팔을 돌린 뒤에는 크기·방향을 다시 맞춰 주세요.</p>
+<label class="slider" for="scale">시계 크기 <output id="scale-output"></output></label><input id="scale" type="range" min=".3" max="2" step=".01" value="1">
+<div class="actions"><button id="vertical">세로 손목</button><button id="horizontal">가로 손목</button></div>
+<label class="slider" for="heading">화면 속 팔 방향 <output id="heading-output"></output></label><input id="heading" type="range" min="-180" max="180" step="1" value="0">
+<label class="slider" for="roll">손목 비틀림 <output id="roll-output"></output></label><input id="roll" type="range" min="-180" max="180" step="1" value="0">
+<label class="slider" for="tilt">손목 기울기 <output id="tilt-output"></output></label><input id="tilt" type="range" min="-80" max="80" step="1" value="0">
+<label class="slider" for="dial">숫자판 방향 <output id="dial-output"></output></label><input id="dial" type="range" min="-180" max="180" step="1" value="90">
+<details><summary>스트랩과 가림 맞추기</summary>
+<label class="slider" for="width">손목 너비 <output id="width-output"></output></label><input id="width" type="range" min=".65" max="2" step=".01" value="1.3">
+<label class="slider" for="depth">손목 두께 <output id="depth-output"></output></label><input id="depth" type="range" min=".6" max="2" step=".01" value="1.4">
+<label class="slider" for="height">피부 위 높이 <output id="height-output"></output></label><input id="height" type="range" min="-.2" max=".6" step=".01" value="0">
+<label class="check"><input id="occlusion" type="checkbox" checked>손목 뒤 스트랩 가리기</label><label class="check"><input id="guide" type="checkbox">손목 모형 보기</label><p class="small">가림은 조절한 손목 모형으로 처리해요. 금속 스트랩 자체는 자동으로 휘어지지 않아요.</p></details>
+<div class="actions"><button id="reset">조절값 초기화</button></div><p class="small" id="saved">조절값은 이 브라우저에 저장돼요.</p>
+<details><summary>시계 모델</summary><p id="model-status" class="small" role="status">Datejust를 불러오는 중 · 약 22MB</p><div class="actions"><button id="datejust">Datejust</button><button id="sample">임시 시계</button></div><label class="file">내 시계 GLB<input id="model-file" type="file" accept=".glb,model/gltf-binary"></label></details>
+</aside></div>
+<p class="foot">한 사람의 영상으로 학습한 2D 위치 실험입니다. 크기와 입체 회전은 자동 추정하지 않습니다. 카메라 영상은 업로드하지 않습니다. <a href="./?v=719&model=datejust">기존 손 관절 추적</a> · <a href="./wrist-center/ONNX-RUNTIME-LICENSE.txt">실행 도구 라이선스</a></p>
+</main><script type="module" src="./wrist-watch.mjs?v=1"></script></body></html>

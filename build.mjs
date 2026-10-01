@@ -19,6 +19,10 @@ for (const name of ['wrist-detector.js', 'direct-wrist-pose.js', 'vendor/wrist']
 for (const name of ['index.html', 'app.js', 'diagnostic-recorder.js', 'fit-settings.js', 'pose.js', 'initial-calibration.js', 'palm-projection.js', 'hand-target.js', 'wrist-rig.js', 'hand-detector.js', 'hand-worker.js', 'rear-assist.js', 'rear-axis.js', 'wrist-flow.js', 'watch.js', 'style.css', 'THIRD_PARTY_NOTICES.md']) {
   await cp(path.join(root, name), path.join(output, name), { recursive: true });
 }
+// Centre-only wrist try-on is a separate validation page, leaving the hand app intact.
+for (const name of ['wrist-watch.html', 'wrist-watch.mjs', 'wrist-watch-fit.mjs', 'wrist-center']) {
+  await cp(path.join(root, name), path.join(output, name), { recursive: true });
+}
 // Only active runtime assets are published; retired experiments stay out of the site.
 for (const name of ['three', 'vision']) await cp(path.join(root, 'vendor', name), path.join(output, 'vendor', name), { recursive: true });
 await cp(path.join(root, 'datejust-ar.glb'), path.join(output, 'datejust-ar.glb'));
