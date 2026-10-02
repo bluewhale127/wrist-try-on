@@ -5,10 +5,10 @@
 </style></head><body><main>
 <h1>손목 중심 · 실시간 비교</h1>
 <p>초록 점이 시계를 놓을 중심을 따라가는지 확인해 주세요. 손가락 없이 손목만 보여도 시작할 수 있습니다.</p>
-<div class="controls"><label>모델 <select id="model"><option value="adapt04">보완 모델 · 새 배경 학습</option><option value="baseline">기존 모델 · 비교용</option></select></label></div>
+<div class="controls"><label>모델 <select id="model"><option value="adapt04">이전 배포 모델 · 04</option><option value="adapt08">새 학습 후보 · 08</option><option value="baseline">초기 모델 · 비교용</option></select></label></div>
 <div id="stage" class="stage"><video id="video" muted autoplay playsinline></video><canvas id="overlay"></canvas></div>
 <p id="status" role="status">카메라 켜기를 눌러 주세요.</p><div id="stats">중심 추적 테스트 1 · 후면 카메라</div>
 <div class="controls"><button id="start">카메라 켜기</button><button id="switch">카메라 전환</button><button id="reset">재추적</button><button id="save">진단 저장</button></div>
 <label><input id="raw" type="checkbox">검출 후보도 보기 (주황색)</label>
 <p><small>이번 화면은 중심 위치만 검증합니다. 시계와 3D 방향은 표시하지 않습니다. 카메라 영상은 이 기기에서 처리하며, 진단 파일에는 이미지 없이 좌표·점수·처리 시간만 저장합니다.</small></p>
-</main><script type="module" src="./wrist-center-live.mjs"></script></body></html>
+</main><script type="module" src="./wrist-center-live.mjs?v=2"></script></body></html>

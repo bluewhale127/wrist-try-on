@@ -3,7 +3,7 @@ import {boxPreprocess,decodeCenter,SIZE,GRID} from './center-preprocess.mjs';
 import {selectCenter,rotatePlanes} from './center-consensus-01.mjs';
 ort.env.wasm.numThreads=1;
 ort.env.wasm.wasmPaths=new URL('./',import.meta.url).href;
-const models={baseline:'center-transfer-01.onnx',adapt04:'center-adapt-04.onnx'};
+const models={baseline:'center-transfer-01.onnx',adapt04:'center-adapt-04.onnx',adapt08:'center-adapt-08.onnx'};
 let session,canvas,context,busy=false;
 self.onmessage=async({data})=>{
  if(busy){data.frame?.close();return;}
