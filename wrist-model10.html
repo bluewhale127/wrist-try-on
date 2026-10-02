@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <meta name="theme-color" content="#101619">
+  <meta name="description" content="카메라로 손목을 비추고 나만의 3D 시계를 착용해 보세요.">
+  <title>모델10 · 손목 중심 + 기존 GLB 추적</title>
+  <link rel="stylesheet" href="./style.css?v=717">
+  <script type="importmap">{"imports":{"three":"./vendor/three/three.module.js","three/addons/":"./vendor/three/addons/"}}</script>
+</head>
+<body>
+  <main class="app">
+    <header class="header"><div><span class="eyebrow">WRIST / STUDIO</span><h1>손목 위의 시계</h1></div><span class="badge">모델10 · 결합 실험</span></header>
+    <div class="workspace">
+      <section class="viewer" aria-label="시계 착용 화면">
+        <div id="stage" class="stage">
+          <video id="camera" autoplay muted playsinline aria-label="카메라 영상"></video>
+          <canvas id="scene" aria-label="3D 시계"></canvas>
+          <canvas id="tracking-debug" aria-hidden="true" hidden></canvas>
+          <div class="stage-top"><span id="mode-label">3D 미리보기</span><span id="camera-label">카메라 꺼짐</span></div>
+          <div id="guide" class="guide" aria-hidden="true"><i></i><i></i><i></i><i></i></div>
+          <div class="stage-bottom"><span id="tracking-label">시계 모델을 먼저 살펴보세요</span><span id="fps" aria-hidden="true"></span></div>
+        </div>
+        <div class="camera-actions"><button id="start" class="primary" type="button">카메라 시작</button><button id="switch" class="secondary" type="button" disabled>카메라 전환</button></div>
+        <label class="check-label"><input id="model10-center" type="checkbox" checked>모델10 손목 중심 보정</label><p id="model10-status" class="small">손등으로 방향·크기를 먼저 맞춰 주세요. 체크를 끄면 기존 위치 계산과 비교할 수 있어요.</p><div class="quick-fit"><label class="slider-label" for="scale">시계 크기 <output id="scale-output">100%</output></label><input id="scale" type="range" min="0.3" max="2" step="0.01" value="1" aria-describedby="scale-help"><p id="scale-help" class="small">작게 ← → 크게 · 조절한 크기는 이 모델에 저장돼요.</p></div>
+        <label class="check-label"><input id="rear-assist" type="checkbox" checked>후면 근접·움직임 보조 <span>시험 적용</span></label>
+        <p class="small">손을 놓쳐도 손목 영상이 확인되면 최대 1초 이어갑니다. 큰 기울기·가림에서는 이어가지 못할 수 있으며, 전면에는 적용하지 않습니다.</p>
+        <button id="calibrate" class="text-button" type="button" disabled>손등 기준 맞추기</button>
+        <p id="status" class="status" role="status" aria-live="polite">손끝까지 화면에 넣고 손등을 카메라와 평행하게 맞춰 주세요. 기준 확인이 끝날 때까지 약 2초 동안 멈춰 주세요.</p>
+        <p id="error" class="error" role="alert" hidden></p>
+        <p id="recording-status" class="small">진단 기록 꺼짐 · 관측 0개 · 시계 표시 0개 · 0초 / 120초</p>
+        <details id="diagnostics"><summary>관절·회전 진단</summary>
+          <label class="check-label"><input id="rear-axis" type="checkbox" checked>후면 팔 기울기 보정 <span>시험 적용</span></label>
+          <label class="check-label"><input id="debug" type="checkbox">관절·회전 표시</label>
+          <p class="small">노랑: 손 관절 · 파랑/초록: 원래/보정 방향. ‘손목 뒤 스트랩 가리기’를 꺼서 가림 영향도 비교할 수 있어요.</p>
+          <p id="debug-info" class="small">카메라를 켜고 진단 표시를 선택하세요.</p>
+          <button id="record-diagnostics" class="text-button" type="button">진단 기록 시작</button>
+          <button id="save-diagnostics" class="text-button" type="button" disabled>진단 기록 저장</button>
+          <button id="clear-diagnostics" class="text-button" type="button" disabled>기록 비우기</button>
+          <p id="recording-help" class="small">시계 표시가 0개면 본체가 붙은 구간이 아직 기록되지 않았어요.</p>
+          <p class="small">‘진단 기록 시작’을 누르면 관절 표시를 꺼도 기록합니다. 최대 2분까지 보존하고 한도에 닿으면 멈춥니다. 카메라를 다시 켜도 기록은 유지됩니다. 저장하면 기록을 멈추고 기기에 JSON 파일을 만듭니다. 새로고침하면 기록은 사라집니다. 영상은 포함하지 않으며 자동 전송하지 않습니다.</p>
+        </details>
+      </section>
+      <aside class="controls" aria-label="시계 설정">
+        <section class="model-section"><div class="section-heading"><span class="eyebrow">01 / WATCH</span><button id="sample" class="text-button" type="button">임시 시계로</button></div><h2 id="model-name">Studio 01</h2><p id="model-caption">준비된 모델이 없어도 바로 테스트할 수 있어요.</p><button id="datejust" class="file-button model-preset" type="button">Datejust 검증 모델 <span>GLB</span></button><label class="file-button" for="model-file">내 시계 불러오기 <span>GLB</span></label><input id="model-file" class="visually-hidden" type="file" accept=".glb,model/gltf-binary"><p class="small">선택한 모델은 이 기기에서만 열립니다.</p><p id="model-status" role="status" aria-live="polite"></p></section>
+        <section class="fit-section"><div class="section-heading"><span class="eyebrow">02 / FIT</span><button id="reset" class="text-button" type="button">초기화</button></div><h2>착용 맞추기</h2><p id="fit-saved" class="small" role="status">조절한 값은 이 브라우저에 자동 저장됩니다.</p>
+          <label class="slider-label" for="offset">착용 위치 <output id="offset-output">기본</output></label><input id="offset" type="range" min="0.1" max="0.95" step="0.01" value="0.38"><div class="range-hints"><span>손 쪽</span><span>팔 쪽</span></div>
+          <label class="slider-label" for="rotation">시계 방향 <output id="rotation-output">90°</output></label><input id="rotation" type="range" min="-180" max="180" step="1" value="90">
+          <p class="small">기본 90°: 6시 → 엄지 · 12시 → 새끼손가락. 손등 기준을 맞추면 자동 정렬됩니다.</p>
+          <button id="align-dial" class="text-button" type="button">6·12시 방향 다시 맞추기</button>
+          <p class="small">시계 방향과 기울기를 기본값으로 맞춥니다. 크기·착용 위치·손목 너비는 유지합니다.</p>
+          <label class="check-label"><input id="occlusion" type="checkbox" checked>손목 뒤 스트랩 가리기 <span>근사 처리</span></label>
+          <details id="wrist-fit"><summary>손목에 감기도록 맞추기</summary><p class="small">손목을 타원형 원기둥으로 추정합니다. 모형을 켜고 손등에서 너비, 옆면에서 두께를 맞춰 주세요. 임시 시계의 스트랩이 함께 감깁니다.</p>
+            <label class="check-label"><input id="wrist-guide" type="checkbox">손목 모형 보기</label>
+            <label class="slider-label" for="wrist-width">손목 너비 <output id="wrist-width-output">100%</output></label><input id="wrist-width" type="range" min="0.65" max="2" step="0.01" value="1">
+            <label class="slider-label" for="wrist-depth">손목 두께 <output id="wrist-depth-output">100%</output></label><input id="wrist-depth" type="range" min="0.6" max="2" step="0.01" value="1">
+            <p class="small">실제 치수 측정은 아닙니다. 불러온 GLB의 스트랩은 자동으로 변형하지 않습니다.</p>
+          </details>
+          <details id="orientation"><summary>모델 방향·높이 조정</summary><p class="small">시계가 옆으로 누워 있거나 손목에 묻힐 때 조정하세요.</p><label class="slider-label" for="tilt-x">앞뒤 기울기 <output id="tilt-x-output">0°</output></label><input id="tilt-x" type="range" min="-180" max="180" step="1" value="0"><label class="slider-label" for="tilt-y">좌우 기울기 <output id="tilt-y-output">0°</output></label><input id="tilt-y" type="range" min="-180" max="180" step="1" value="0"><label class="slider-label" for="height">손목 위 높이 <output id="height-output">0</output></label><input id="height" type="range" min="-0.6" max="0.8" step="0.01" value="0"></details>
+        </section>
+        <p class="note">크기는 시각적으로 추정합니다. 실제 치수 측정용은 아니며, 손목을 크게 돌리면 정렬이 흐트러질 수 있습니다.</p>
+      </aside>
+    </div>
+    <footer>Wrist Studio 0.7.19 · Android Chrome 기준 · 영상은 기기 안에서 처리됩니다</footer>
+  </main>
+  <script type="module" src="./app.js?v=hybrid10-1"></script>
+</body>
+</html>
