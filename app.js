@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { DRACOLoader } from 'three/addons/loaders/DRACOLoader.js';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
-import { estimateWristPose, landmarkPoint, WristPoseTracker, smoothingAlpha, watchRotationDegrees } from './pose.js?v=101';
+import { estimateWristPose, landmarkPoint, WristPoseTracker, smoothingAlpha, watchRotationDegrees } from './pose.js?v=107';
 import { calibrationPrompt } from './initial-calibration.js?v=101';
 import { RearPalmAxis } from './rear-axis.js?v=79';
 import { HandDetector } from './hand-detector.js?v=75';
@@ -16,7 +16,7 @@ import { FIT_CONTROLS, FitSettings, defaultFit } from './fit-settings.js?v=105-d
 import {HandWristCenter} from './hand-wrist-center.mjs?v=2';
 import {WristCenterClient} from './wrist-center-client.mjs?v=1';
 import {WristCenterContinuation} from './wrist-center-continuation.mjs?v=1';
-import {WatchSizeLock} from './watch-size-lock.mjs?v=1';
+import {WatchSizeLock} from './watch-size-lock.mjs?v=2';
 
 const $ = id => document.getElementById(id);
 const video = $('camera'), stage = $('stage'), status = $('status'), errorBox = $('error');
@@ -28,7 +28,7 @@ const fitSettings = new FitSettings(storage);
 let renderer, scene, camera, anchor, adjustment, occluder, watch;
 let mediaStream = null, mode = 'idle', operation = 0, facingMode = 'environment', mirror = false;
 let handLandmarker = null, detectorPromise = null;
-const tracker = new WristPoseTracker({allowClosedStart:!!$('model10-center')});
+const tracker = new WristPoseTracker({allowClosedStart:!!$('model10-center'),checkPalmConsistency:!!$('model10-center')});
 const handTarget = new HandTarget();
 const rearAssist = new RearWristAssist();
 const rearAxis = new RearPalmAxis();
@@ -55,7 +55,7 @@ let inferenceInterval = 33;
 const reduceMotion = matchMedia('(prefers-reduced-motion: reduce)').matches;
 
 function diagnosticContext() {
-  return { mode, operation, mirror, facingMode, orientationSign: tracker.orientationSign,
+  return { appVersion:'model10.7', mode, operation, mirror, facingMode, orientationSign: tracker.orientationSign,
     centerMode:centerEnabled()?'hybrid10':'legacy',centerFailure,
     watchOrientationSign: tracker.watchOrientationSign, template: tracker.template?.map(p => p.toArray()),
     selectedRotation: tracker.previousRotation?.toArray(), rotationVelocity: tracker.rotationVelocity.toArray(),
@@ -246,7 +246,7 @@ async function detect(time) {
       const fitted=trusted?wristCenter.apply(displayPose,completed,view,mirror):null;
       wristContinuation.update(fitted,centerData,view,time,completed,mirror,selected===null||!next?.calibration?.inFrame);
     }else wristContinuation.reset();
-    if($('model10-status'))$('model10-status').textContent=!centerEnabled()?'기존 손 관절 위치 사용':centerFailure?'손목 모델을 준비하지 못해 기존 위치를 사용합니다. 카메라를 다시 켜 주세요.':wristCenter.diagnostic.used?(wristCenter.diagnostic.reason==='local-fit'?'모델10.5 · 착용 위치 보정 중':'모델10.5 · 착용 위치 유지 중'):'모델10.5 · 손등에서 착용 위치 확인 중';
+    if($('model10-status'))$('model10-status').textContent=!centerEnabled()?'기존 손 관절 위치 사용':centerFailure?'손목 모델을 준비하지 못해 기존 위치를 사용합니다. 카메라를 다시 켜 주세요.':wristCenter.diagnostic.used?(wristCenter.diagnostic.reason==='local-fit'?'모델10.7 · 착용 위치 보정 중':'모델10.7 · 착용 위치 유지 중'):'모델10.7 · 손등에서 착용 위치 확인 중';
     if(assistEnabled){
       if(accepted && tracker.orientationSign && tracker.diagnostics.quality>=.65 && tracker.diagnostics.disagreement<.75)rearAssist.correct(displayPose,time);
       else if(accepted){rearAssist.reset();rearAssist.diagnostics={state:'hand',reason:'uncertain-anchor'};}
@@ -348,6 +348,7 @@ function render(time) {
     diagnosticRecorder.recordRender({ time, mode, operation, watchVisible, inferenceTime: debugFrame?.time ?? null,
       centerApplied:watchVisible&&centerApplied,
       trackingSource:watchVisible?renderSource:null,
+      maskShape:watchVisible?{radiusX:occluder.scale.x,length:occluder.scale.y,radiusZ:occluder.scale.z}:null,
       sizeLocked:!!$('lock-size')?.checked,caseSize:watchVisible?renderSize:null,wristRadius:watchVisible?renderRadius:null,
       orientationSign: tracker.orientationSign, state: tracker.diagnostics.state, mirror,
       anchorRotation: watchVisible ? anchor.quaternion.toArray() : null,

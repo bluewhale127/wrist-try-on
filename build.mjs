@@ -16,7 +16,7 @@ for (const name of ['wrist-detector.js', 'direct-wrist-pose.js', 'vendor/wrist',
   if (!actualTarget.startsWith(actualOutput + path.sep)) throw new Error('Retired asset is outside dist/.');
   await rm(target, { recursive: true, force: true });
 }
-for (const name of ['index.html', 'app.js', 'diagnostic-recorder.js', 'fit-settings.js', 'pose.js', 'initial-calibration.js', 'palm-projection.js', 'hand-target.js', 'wrist-rig.js', 'hand-detector.js', 'hand-worker.js', 'rear-assist.js', 'rear-axis.js', 'wrist-flow.js', 'watch.js', 'style.css', 'THIRD_PARTY_NOTICES.md']) {
+for (const name of ['index.html', 'app.js', 'diagnostic-recorder.js', 'fit-settings.js', 'pose.js', 'palm-consistency.mjs', 'initial-calibration.js', 'palm-projection.js', 'hand-target.js', 'wrist-rig.js', 'hand-detector.js', 'hand-worker.js', 'rear-assist.js', 'rear-axis.js', 'wrist-flow.js', 'watch.js', 'style.css', 'THIRD_PARTY_NOTICES.md']) {
   await cp(path.join(root, name), path.join(output, name), { recursive: true });
 }
 // Centre-only wrist try-on is a separate validation page, leaving the hand app intact.

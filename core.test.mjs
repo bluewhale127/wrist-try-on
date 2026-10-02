@@ -898,3 +898,32 @@ test('inverted startup axes are rejected even with the broader depth agreement t
     assert.equal(tracker.orientationSign,0);assert.equal(tracker.template,null);assert.equal(tracker.diagnostics.reason,'depth');
   }
 });
+
+
+test('palm consistency permits full wrist rotations without a camera-facing clamp',()=>{
+ const tracker=new WristPoseTracker({checkPalmConsistency:true});
+ for(let time=0;time<=2000;time+=40)tracker.update(rotationPose(0),time);
+ assert.equal(tracker.orientationSign,1);
+ let time=2000,sawPalm=false;
+ for(let degrees=0;degrees<=360;degrees+=5){
+  time+=50;tracker.update(rotationPose(degrees*Math.PI/180),time);
+  const q=tracker.sample(time)?.rotation;
+  if(q&&new Vector3(0,0,1).applyQuaternion(q).z<-.8)sawPalm=true;
+  assert.notEqual(tracker.diagnostics.reason,'deformed-palm');
+ }
+ assert.ok(sawPalm,'A real palm-facing rotation remains available');
+});
+
+test('a non-planar image fit uses measured world rotation while a malformed palm expires',()=>{
+ const tracker=new WristPoseTracker({checkPalmConsistency:true});
+ for(let time=0;time<=2000;time+=40)tracker.update(rotationPose(0),time);
+ const changed=rotationPose(.2);changed.imagePalm[2].x+=24;
+ for(let t=2040;t<=2400;t+=40)tracker.update(changed,t);
+ assert.equal(tracker.diagnostics.worldAssisted,true);
+ const planarError=Math.min(...fitPalmProjection(tracker.template,changed.imagePalm).rotations.map(q=>q.angleTo(changed.rotation)));
+ assert.ok(tracker.previousRotation.angleTo(changed.rotation)<planarError*.9);
+ const bad=rotationPose(.2);bad.worldPalm[4].x+=.2;
+ assert.equal(tracker.update(bad,2440),false);
+ assert.equal(tracker.diagnostics.reason,'deformed-palm');
+ assert.equal(tracker.sample(2661),null);
+});

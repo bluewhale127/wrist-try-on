@@ -354,3 +354,12 @@ Datejust 기본 방향에 한해 분리된 브레이슬릿 메시를 손목 너�
 ### 모델10.5 기본 착용값 업데이트
 
 사용자가 선택한 Datejust 시계 크기 109%(scale 1.09), 손목 위 높이 -0.21을 새 기본값으로 적용했습니다. 처음 불러오기와 설정 초기화에 적용되며 기존 저장값은 유지합니다. 샘플 및 다른 GLB의 기본값, 롤백된 모델10.5 추적·회전·장착 방식은 그대로입니다. 자동 검사 177개, 빌드, 브라우저에서 첫 로딩·사용자 설정 저장·새로고침·초기화를 확인했습니다.
+
+
+### Model10.7: independent wrist-mask scale and palm consistency
+
+The watch-size lock now preserves only case size; the occlusion mask follows the current filtered wrist radius. Datejust defaults remain scale 1.09 and height -0.21. The GLB, strap geometry, model pivot, and adapt09 weights are unchanged.
+
+When observed knuckles no longer fit the calibrated palm plane, rotation gradually favors the measured world-landmark frame. Strong relative bone-proportion deformation is rejected using the existing short tracking expiry. Full wrist rotation remains allowed; no camera-facing clamp or side correction is added.
+
+Validation: 179 automated tests, build, three recorded-landmark regressions, app-level diagnostic replay, and real detector image zoom/loss/reacquisition checks. The latest replay held case size constant while mask radius varied. Some inconsistent observations reduce display coverage. Recorded normal signs have no independent orientation ground truth and are not accuracy scores. The mask remains an approximate elliptical cylinder, not a reconstruction of the forearm outline; mobile fit and physical scale still need user verification.

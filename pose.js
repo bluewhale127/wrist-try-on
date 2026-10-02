@@ -1,3 +1,4 @@
+import { PalmConsistency } from './palm-consistency.mjs';
 import { Matrix4, Quaternion, Vector3 } from './vendor/three/three.module.js';
 import { fitPalmProjection } from './palm-projection.js?v=5';
 
@@ -135,7 +136,7 @@ function cutoffAlpha(dt, hz) { return 1 - Math.exp(-2 * Math.PI * hz * dt); }
 // Adaptive filtering: steady hands get stronger smoothing, moving hands respond quickly.
 // Hold only brief gaps; never extrapolate a watch indefinitely after a hand leaves the frame.
 export class WristPoseTracker {
-  constructor({allowClosedStart=false}={}) { this.allowClosedStart=allowClosedStart;this.reset(); }
+  constructor({allowClosedStart=false,checkPalmConsistency=false}={}) { this.allowClosedStart=allowClosedStart;this.checkPalmConsistency=checkPalmConsistency;this.reset(); }
   get watchOrientationSign() {
     // A bad initial world frame can unproject the thumb into template -X.
     // The observed template ordering, not the world frame alone, decides
@@ -144,6 +145,7 @@ export class WristPoseTracker {
     return (this.orientationSign || 1) * (radial < 0 ? -1 : 1);
   }
   reset() {
+    this.palmConsistency = new PalmConsistency();
     this.pose = null; this.previous = null; this.lastGood = -Infinity; this.speed = 0;
     this.velocity = new Vector3(); this.pending = null; this.pendingRotation = null;
     this.motionVelocity = new Vector3(); this.pendingPose = null;
@@ -166,15 +168,33 @@ export class WristPoseTracker {
       if (this.orientationSign === -1) this.calibrationRotation.multiply(halfTurn);
       this.calibrationHeading = next.heading;
       this.template = initial.template;
+      this.palmConsistency.capture(next);
       this.initialCalibration.reset();
       // Discard provisional position history before the first visible pose.
       this.pose = null;
     }
     if (next.rotationQuality < 0.5) { this.branchEvidence = null; this.surfaceEvidence = null; this.depthEvidence = null; this.turnEvidence = null; return null; }
+    if(this.checkPalmConsistency){
+      const observation=this.palmConsistency.assess(next);
+      this.diagnostics.observationConsistency=observation;
+      if(!observation.allowed){
+        this.branchEvidence=null;this.surfaceEvidence=null;this.depthEvidence=null;this.turnEvidence=null;
+        this.diagnostics.reason=observation.reason;return null;
+      }
+    }
     const projection = fitPalmProjection(this.template, next.imagePalm);
     if (!projection) { this.surfaceEvidence = null; this.depthEvidence = null; this.turnEvidence = null; return null; }
     const raw = this.orientationSign === 1 ? next.rotation.clone() : next.rotation.clone().multiply(halfTurn);
-    const candidates = projection.rotations.map(q=>this.orientationSign === 1 ? q : q.multiply(halfTurn));
+    // Curling/overlapping fingers can move inferred knuckles off the
+    // calibrated palm plane. Do not turn that deformation into a large
+    // foreshortening angle: use the measured 3D frame through the same temporal
+    // filter, after the relative-bone consistency check above. No roll clamp.
+    const worldWeight=this.checkPalmConsistency?clamp((projection.residual-.02)/.02,0,1):0;
+    const worldAssisted=worldWeight>0;
+    const candidates = projection.rotations.map(q=>{
+      const oriented=this.orientationSign === 1 ? q : q.multiply(halfTurn);
+      return worldAssisted?oriented.slerp(raw,worldWeight):oriented;
+    });
     // Display expiry and orientation memory are different. A short occlusion
     // must not let a noisy world-depth estimate choose the opposite solution.
     const age = time - this.lastRotationGood;
@@ -197,7 +217,7 @@ export class WristPoseTracker {
       if (this.branchEvidence.count >= 3 && time-this.branchEvidence.started >= 100 && rawChoice.angleTo(previous) < 0.7) { rotation = rawChoice; branchConfirmed = true; }
     } else this.branchEvidence = null;
     const quality = Math.exp(-((projection.residual/0.07)**2));
-    const fittedNormalZ = projection.normalZ*this.orientationSign;
+    const fittedNormalZ = worldAssisted ? Z.clone().applyQuaternion(rotation).z : projection.normalZ*this.orientationSign;
     const rawNormalZ = Z.clone().applyQuaternion(raw).z;
     const depth = next.depthRotation?.clone();
     if (depth && this.orientationSign === -1) depth.multiply(halfTurn);
@@ -260,7 +280,7 @@ export class WristPoseTracker {
     } else { this.depthEvidence = null; this.depthBlocked = false; }
     const disagreement = rotation.angleTo(raw);
     this.diagnostics = { state: quality < 0.35 ? 'uncertain' : disagreement > 0.6 ? 'corrected' : 'tracking',
-      quality, progress: 1, residual: projection.residual, disagreement, rawNormalZ,
+      worldAssisted, worldWeight, observationConsistency:this.checkPalmConsistency?this.palmConsistency.assess(next):null, quality, progress: 1, residual: projection.residual, disagreement, rawNormalZ,
       fittedNormalZ, surface:Math.abs(fittedNormalZ)>=0.86?surface:'edge', surfaceConfirmed, surfaceRealigned,
       memoryAgeMs: Number.isFinite(age) ? age : null, branchConfirmed,
       depthPending, depthRealigned, depthEvidenceFrames:this.depthEvidence?.count || 0,
