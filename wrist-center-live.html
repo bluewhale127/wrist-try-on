@@ -1,0 +1,14 @@
+<!doctype html>
+<html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><title>손목 중심 · 실시간 비교</title>
+<style>
+*{box-sizing:border-box}body{margin:0;background:#101b21;color:#edf5f6;font:15px system-ui,sans-serif}main{max-width:720px;margin:auto;padding:14px}h1{font-size:21px;margin:4px 0 8px}p{color:#b8cbd1;line-height:1.5;margin:8px 0}.stage{position:relative;width:100%;height:min(60svh,650px);background:#060c10;border-radius:12px;overflow:hidden}.stage video,.stage canvas{position:absolute;width:100%;height:100%;object-fit:contain;inset:0}.stage.mirror video,.stage.mirror canvas{transform:scaleX(-1)}.controls{display:flex;gap:8px;flex-wrap:wrap;margin:12px 0}button,select{font:inherit;background:#233943;color:inherit;border:1px solid #4a6772;border-radius:9px;padding:11px}button:disabled{opacity:.4}#start{background:#276b50}#status{min-height:24px;color:#79ecc0}#stats{font:13px monospace;color:#bac9d0;min-height:20px}label{display:flex;align-items:center;gap:8px}small{color:#a3b9c0}
+</style></head><body><main>
+<h1>손목 중심 · 실시간 비교</h1>
+<p>초록 점이 시계를 놓을 중심을 따라가는지 확인해 주세요. 손가락 없이 손목만 보여도 시작할 수 있습니다.</p>
+<div class="controls"><label>모델 <select id="model"><option value="adapt04">보완 모델 · 새 배경 학습</option><option value="baseline">기존 모델 · 비교용</option></select></label></div>
+<div id="stage" class="stage"><video id="video" muted autoplay playsinline></video><canvas id="overlay"></canvas></div>
+<p id="status" role="status">카메라 켜기를 눌러 주세요.</p><div id="stats">중심 추적 테스트 1 · 후면 카메라</div>
+<div class="controls"><button id="start">카메라 켜기</button><button id="switch">카메라 전환</button><button id="reset">재추적</button><button id="save">진단 저장</button></div>
+<label><input id="raw" type="checkbox">검출 후보도 보기 (주황색)</label>
+<p><small>이번 화면은 중심 위치만 검증합니다. 시계와 3D 방향은 표시하지 않습니다. 카메라 영상은 이 기기에서 처리하며, 진단 파일에는 이미지 없이 좌표·점수·처리 시간만 저장합니다.</small></p>
+</main><script type="module" src="./wrist-center-live.mjs"></script></body></html>
