@@ -9,7 +9,7 @@ await mkdir(output, { recursive: true });
 // Clean only retired build artifacts, including when upgrading an existing dist/.
 const actualRoot = await realpath(root), actualOutput = await realpath(output);
 if (path.relative(actualRoot, actualOutput) !== 'dist') throw new Error('Build output must remain inside the project.');
-for (const name of ['wrist-detector.js', 'direct-wrist-pose.js', 'vendor/wrist']) {
+for (const name of ['wrist-detector.js', 'direct-wrist-pose.js', 'vendor/wrist', 'datejust-bracelet.mjs', 'wrist-roll-correction.mjs', 'fist-surface-guard.mjs']) {
   const target = path.resolve(output, name);
   let actualTarget;
   try { actualTarget = await realpath(target); } catch (error) { if (error.code === 'ENOENT') continue; throw error; }
@@ -24,7 +24,7 @@ for (const name of ['wrist-watch.html', 'wrist-watch.mjs', 'wrist-watch-fit.mjs'
   await cp(path.join(root, name), path.join(output, name), { recursive: true });
 }
 // GLB fitting is a separate mobile experiment. No private training photos are published.
-for (const name of ['wrist-glb.html', 'wrist-glb.mjs', 'wrist-glb-placement.mjs', 'wrist-fit-geometry.mjs', 'wrist-glb-center-test.html', 'wrist-glb-center-test.mjs','wrist-model10.html','hand-wrist-center.mjs','wrist-center-client.mjs','wrist-center-continuation.mjs','datejust-bracelet.mjs','watch-size-lock.mjs','wrist-roll-correction.mjs','fist-surface-guard.mjs']) {
+for (const name of ['wrist-glb.html', 'wrist-glb.mjs', 'wrist-glb-placement.mjs', 'wrist-fit-geometry.mjs', 'wrist-glb-center-test.html', 'wrist-glb-center-test.mjs','wrist-model10.html','hand-wrist-center.mjs','wrist-center-client.mjs','wrist-center-continuation.mjs','watch-size-lock.mjs']) {
   await cp(path.join(root, name), path.join(output, name));
 }
 // Only active runtime assets are published; retired experiments stay out of the site.
