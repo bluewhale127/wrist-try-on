@@ -30,3 +30,12 @@ Open `wrist-center-live.html?model=adapt08&v=2` to select the newly trained cand
 Trained on 62 manually labeled, unmarked originals. The final six training examples have mean center distance 13.12px (deployed04: 37.86px). Six excluded, repeatedly checked validation examples have 9.16px mean distance (deployed04: 16.57px), with 5/6 accepted within 20px. This is not a fresh blind test. Other reviewed recordings still contain large errors, including an accepted approximately 50px error; this release is for requested mobile comparison, not a validated production replacement. No private photos or labels are published.
 
 ONNX output parity: 272 inputs, maximum absolute heatmap difference 0.00002486. Diagnostics identify model and center-live-02. Real Android camera validation remains pending.
+
+
+## Candidate 09 requested trial
+
+Use `wrist-center-live.html?model=adapt09&v=3`. Candidate08 remains available. Candidate09 fine-tunes08 on 68 reviewed wrist images, 27 newly reviewed whole-frame negatives and prior negative crops. No confidence thresholds or temporal logic changed.
+
+New palm training images: mean36.85 to10.87 source pixels; repeated excluded six-image validation:9.16 to7.10. These are not new blind tests. Raw background training frames were already rejected by08; a screen-recorded failure replay still has false detections (2/6 to3/6), with overlay/recompression limitations. A prior wrist example worsened34.36 to45.87px. Published at user request for comparison, not as a proven background fix.
+
+ONNX parity verified on272 inputs (max heatmap delta0.00002966). Diagnostics identify center-live-03 and selected model.

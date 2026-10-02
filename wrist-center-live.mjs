@@ -26,7 +26,7 @@ async function start(){
   const actual=stream.getVideoTracks()[0].getSettings().facingMode;
   $('stage').classList.toggle('mirror',(actual||facing)==='user');
   video.srcObject=stream;await video.play();if(epoch!==generation)return;
-  worker=new Worker(new URL('./wrist-center/center-live-worker-01.mjs?v=2',import.meta.url),{type:'module'});
+  worker=new Worker(new URL('./wrist-center/center-live-worker-01.mjs?v=3',import.meta.url),{type:'module'});
   watchdog=setTimeout(()=>{if(epoch===generation)fail('모델 준비 시간이 초과됐습니다. 카메라 켜기로 다시 시도해 주세요.');},45000);
   worker.onerror=()=>{if(epoch===generation)fail('모델 실행 오류입니다. 새로고침 후 다시 시도해 주세요.');};
   worker.onmessage=({data})=>{
@@ -75,7 +75,7 @@ $('model').onchange=()=>{clearTracking();record({event:'model',model:$('model').
 $('switch').onclick=()=>{facing=facing==='environment'?'user':'environment';clearTracking();if(running)start();else{$('stats').textContent=facing==='user'?'전면 카메라 선택':'후면 카메라 선택';}};
 $('reset').onclick=()=>{if(running)start();else clearTracking();};
 $('save').onclick=()=>{
- const data={version:'center-live-02',model:$('model').value,exportedAt:new Date().toISOString(),imagesIncluded:false,frames,attached,logs};
+ const data={version:'center-live-03',model:$('model').value,exportedAt:new Date().toISOString(),imagesIncluded:false,frames,attached,logs};
  const url=URL.createObjectURL(new Blob([JSON.stringify(data)],{type:'application/json'}));
  const a=document.createElement('a');a.href=url;a.download=`wrist-center-live-${new Date().toISOString().replaceAll(':','-')}.json`;a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);
 };
