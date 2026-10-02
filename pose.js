@@ -1,7 +1,7 @@
 import { Matrix4, Quaternion, Vector3 } from './vendor/three/three.module.js';
 import { fitPalmProjection } from './palm-projection.js?v=5';
 
-import { InitialCalibration } from './initial-calibration.js?v=78';
+import { InitialCalibration } from './initial-calibration.js?v=101';
 
 // The video and 3D overlay both use CSS object-fit: cover. All units here are CSS pixels.
 export function coverTransform(videoWidth, videoHeight, width, height) {
@@ -106,10 +106,12 @@ export function estimateWristPose(landmarks, view, { mirror = false, offset = 0.
   const allPoints = landmarks.every(finitePoint) ? landmarks.map(p=>landmarkPoint(p,view,mirror)) : [];
   const inFrame = allPoints.length === 21 && allPoints.every(p=>Math.abs(p.x)<view.width*.48 && Math.abs(p.y)<view.height*.48);
   // Geometric eligibility, not an occlusion classifier: inferred landmarks
-  // can still be wrong. Require extended fingers only while learning a palm.
+  // can still be wrong. Startup chooses the extended or opt-in closed gate.
   const open = allPoints.length === 21 && [5,9,13,17].every(i=>
     allPoints[i+3].clone().sub(allPoints[i]).dot(y2) > projectedLength*.25);
-  return { calibration: {inFrame,open}, position, rotation, size, wristRadius: palmWidth * 0.65 * 0.46, heading, rotationQuality, thumbUsed, imagePalm: screen, worldPalm, userScale: scale, mirror, depthRotation };
+  const closed = allPoints.length === 21 && [5,9,13,17].every(i=>
+    allPoints[i+3].clone().sub(allPoints[i]).dot(y2) < projectedLength*.20);
+  return { calibration: {inFrame,open,closed}, position, rotation, size, wristRadius: palmWidth * 0.65 * 0.46, heading, rotationQuality, thumbUsed, imagePalm: screen, worldPalm, userScale: scale, mirror, depthRotation };
 }
 
 // Rotate the case around the wrist centre, not around the centre of the dial.
@@ -133,7 +135,7 @@ function cutoffAlpha(dt, hz) { return 1 - Math.exp(-2 * Math.PI * hz * dt); }
 // Adaptive filtering: steady hands get stronger smoothing, moving hands respond quickly.
 // Hold only brief gaps; never extrapolate a watch indefinitely after a hand leaves the frame.
 export class WristPoseTracker {
-  constructor() { this.reset(); }
+  constructor({allowClosedStart=false}={}) { this.allowClosedStart=allowClosedStart;this.reset(); }
   get watchOrientationSign() {
     // A bad initial world frame can unproject the thumb into template -X.
     // The observed template ordering, not the world frame alone, decides
@@ -145,7 +147,7 @@ export class WristPoseTracker {
     this.pose = null; this.previous = null; this.lastGood = -Infinity; this.speed = 0;
     this.velocity = new Vector3(); this.pending = null; this.pendingRotation = null;
     this.motionVelocity = new Vector3(); this.pendingPose = null;
-    this.orientationSign = 0; this.angularSpeed = 0; this.initialCalibration = new InitialCalibration(); this.template = null;
+    this.orientationSign = 0; this.angularSpeed = 0; this.initialCalibration = new InitialCalibration({allowClosedStart:this.allowClosedStart}); this.template = null;
     this.calibrationRotation = null; this.calibrationHeading = 0;
     this.lastRotationGood = -Infinity; this.lastInput = -Infinity;
     this.previousRotation = null; this.rotationVelocity = new Vector3(); this.recovery = null; this.branchEvidence = null;

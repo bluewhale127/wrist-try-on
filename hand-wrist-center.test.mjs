@@ -31,13 +31,47 @@ test('missing hand, low score, remote hand and outside-camera values never fabri
   const original=pose(),r=substituteWristCenter(original,{...measurement,pose:p},view,settings);assert.equal(r.used,false);assert.strictEqual(r.pose,original);
  }
 });
-test('only matching fresh frames can correct; correction expires and camera change clears usage',()=>{
- const f=new HandWristCenter(),original=pose();
- assert.equal(f.update(original,measurement,view,settings,100,130),true);
- assert.notDeepEqual(f.apply(original,140,view).position.toArray(),original.position.toArray());
- assert.strictEqual(f.apply(original,241,view),original);
- assert.strictEqual(f.apply(original,140,{...view,width:401}),original);
- assert.equal(f.update(original,{...measurement,time:100},view,settings,180,190),false);
- assert.strictEqual(f.apply(original,190,view),original);
- assert.equal(f.update(original,{...measurement,time:200},view,settings,200,450),false);
+const back={state:'tracking',surface:'back',surfaceConfirmed:true};
+function fitted(){
+ const f=new HandWristCenter(),p=pose();
+ for(let t=100;t<=2100;t+=100)f.update(p,{...measurement,time:t},view,settings,t,t+40,false,back);
+ return {f,p};
+}
+test('only consistent fresh dorsal observations can learn an offset',()=>{
+ const f=new HandWristCenter(),p=pose();
+ for(let t=100;t<=2000;t+=100){
+  f.update(p,{...measurement,time:t-1},view,settings,t,t+40,false,back);assert.strictEqual(f.apply(p,t+50,view),p);
+ }
+ const {f:fit,p:original}=fitted();assert.ok(fit.binding);
+ assert.notDeepEqual(fit.apply(original,2150,view).position.toArray(),original.position.toArray());
+ assert.strictEqual(fit.apply(original,2150,{...view,width:401}),original);
+ assert.strictEqual(fit.apply(null,2150,view),null);
+});
+test('misses, 140ms gaps and palm observations do not snap to the old geometric center',()=>{
+ const {f,p}=fitted(),before=f.apply(p,2150,view).position.clone();
+ f.update(p,null,view,settings,2200,2250,false,back);
+ assert.deepEqual(f.apply(p,2250,view).position.toArray(),before.toArray());
+ f.update(p,{...measurement,time:2300,pose:{...measurement.pose,x:390}},view,settings,2300,2340,false,{...back,surface:'palm'});
+ assert.deepEqual(f.apply(p,2441,view).position.toArray(),before.toArray());
+ for(let t=2400;t<=3000;t+=100)f.update(p,{...measurement,time:t,pose:{...measurement.pose,x:390}},view,settings,t,t+40,false,{...back,moving:true});
+ assert.deepEqual(f.apply(p,3041,view).position.toArray(),before.toArray());
+ assert.strictEqual(f.apply(p,4201,view),p);
+});
+test('the wearing offset follows hand rotation and scale without changing its axes',()=>{
+ const {f,p}=fitted(),base=f.apply(p,2150,view).position.clone().sub(p.position);
+ const rotation=new Quaternion().setFromAxisAngle(new Vector3(0,1,0),Math.PI/2).multiply(p.rotation);
+ const turned={...p,rotation,wristRadius:p.wristRadius*2};
+ f.update(turned,null,view,settings,2200,2250,false,{...back,surface:'edge'});
+ const result=f.apply(turned,2250,view),actual=result.position.clone().sub(turned.position);
+ const expected=base.clone().applyQuaternion(new Quaternion().setFromAxisAngle(new Vector3(0,1,0),Math.PI/2)).multiplyScalar(2);
+ assert.ok(actual.distanceTo(expected)<1e-8);assert.strictEqual(result.rotation,rotation);assert.equal(result.size,p.size);
+});
+test('long lost hands, explicit resets and changed camera views discard the stored fit',()=>{
+ for(const change of ['loss','reset','view']){
+  const {f,p}=fitted();
+  if(change==='loss')f.update(null,null,view,settings,3500,3550);
+  if(change==='reset')f.reset();
+  if(change==='view')f.update(p,null,{...view,width:401},settings,2200,2250);
+  assert.equal(f.binding,null);
+ }
 });

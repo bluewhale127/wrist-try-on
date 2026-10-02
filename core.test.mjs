@@ -805,6 +805,24 @@ test('startup cannot accumulate dwell through missing or invalid frames',()=>{
     tracker.update(rotationPose(0),3000);assert.ok(tracker.orientationSign);
   }
 });
+
+test('opt-in closed-hand startup needs a stable frontal fist for 2.2 seconds',()=>{
+ const tracker=new WristPoseTracker({allowClosedStart:true});
+ const p=rotationPose(0);p.calibration={inFrame:true,open:false,closed:true};p.rotationQuality=.7;
+ for(let t=0;t<2200;t+=100){tracker.update(p,t);assert.equal(tracker.orientationSign,0);}
+ tracker.update(p,2200);assert.ok(tracker.orientationSign);assert.ok(tracker.sample(2200));
+ tracker.reset();assert.equal(tracker.initialCalibration.allowClosedStart,true);
+});
+test('closed-hand opt-in does not accept a tilted, uncertain or partially curled start',()=>{
+ for(const kind of ['side','depth','partial','quality']){
+  const tracker=new WristPoseTracker({allowClosedStart:true}),p=rotationPose(kind==='side'?1:0);
+  p.calibration={inFrame:true,open:false,closed:kind!=='partial'};
+  if(kind==='depth')p.depthRotation=new Quaternion().setFromAxisAngle(new Vector3(1,0,0),.5);
+  if(kind==='quality')p.rotationQuality=.5;
+  for(let t=0;t<5000;t+=100)tracker.update(p,t);
+  assert.equal(tracker.orientationSign,0,kind);
+ }
+});
 test('startup rejects tilted, depth-inconsistent, cropped and curled inputs without timing out to a guess',()=>{
   for(const kind of ['tilted','depth','cropped','curled'])for(const mirror of [false,true]){
     const tracker=new WristPoseTracker(),hand=rotatedHand(kind==='tilted'?.8:0);

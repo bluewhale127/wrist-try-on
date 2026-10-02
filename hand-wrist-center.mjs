@@ -32,18 +32,43 @@ export function substituteWristCenter(pose,measurement,view,settings,mirror=fals
 
 export class HandWristCenter {
  constructor(){this.reset();}
- reset(){this.lastTime=-Infinity;this.correction=null;this.diagnostic={used:false,reason:'waiting'};}
- update(pose,measurement,view,settings,time,now,mirror=false){
+ reset(){this.lastTime=-Infinity;this.lastHand=-Infinity;this.binding=null;this.pending=null;this.diagnostic={used:false,reason:'waiting'};}
+ update(pose,measurement,view,settings,time,now,mirror=false,tracking={}){
   if(!Number.isFinite(time)||!Number.isFinite(now)||time<=this.lastTime||now<time)return false;
-  this.lastTime=time;
-  if(now-time>220||measurement?.time!==time){this.correction=null;this.diagnostic={used:false,reason:'stale-or-unmatched'};return false;}
-  const result=substituteWristCenter(pose,measurement,view,settings,mirror);this.diagnostic={...result,pose:undefined};
-  this.correction=result.used?{delta:result.pose.position.clone().sub(pose.position),time,view:[view.width,view.height,view.videoWidth,view.videoHeight,mirror].join(':')}:null;
-  return result.used;
+  const key=[view.width,view.height,view.videoWidth,view.videoHeight,mirror].join(':');
+  if(time-this.lastHand>1200||(this.binding&&this.binding.view!==key))this.reset();
+  const dt=Math.max(0,Math.min(.15,(time-this.lastTime)/1000));this.lastTime=time;
+  const hold=reason=>{this.pending=null;this.diagnostic={used:!!this.binding,reason:this.binding?'held-local-fit':reason,observation:reason};return false;};
+  if(!pose)return hold('no-hand-pose');
+  this.lastHand=time;
+  if(now-time>220||measurement?.time!==time)return hold('stale-or-unmatched');
+  // The annotated C on the palm/edge is not the hidden dorsal watch surface.
+  // Learn a wearing offset on a confirmed broad back, then rotate that offset
+  // with the existing hand frame instead of chasing C around the wrist.
+  const x=new Vector3(1,0,0).applyQuaternion(pose.rotation),y=new Vector3(0,1,0).applyQuaternion(pose.rotation);
+  const determinant=x.x*y.y-x.y*y.x;
+  if(tracking.moving||tracking.surface!=='back'||!tracking.surfaceConfirmed||!['tracking','corrected'].includes(tracking.state)||determinant<.65)return hold('wait-for-back');
+  const result=substituteWristCenter(pose,measurement,view,settings,mirror);
+  if(!result.used)return hold(result.reason);
+  const scale=pose.wristRadius/(.65*.46),delta=result.pose.position.clone().sub(pose.position);
+  const local=new Vector3((delta.x*y.y-delta.y*y.x)/determinant/scale,(x.x*delta.y-x.y*delta.x)/determinant/scale,0);
+  if(!Number.isFinite(local.length())||local.length()>.8)return hold('offset-outlier');
+  const prior=this.pending,consistent=prior&&time-prior.time<=250&&local.distanceTo(prior.reference)<.10;
+  this.pending={reference:consistent?prior.reference:local.clone(),time,start:consistent?prior.start:time,count:consistent?prior.count+1:1};
+  if(this.pending.count<3||time-this.pending.start<180){this.diagnostic={used:!!this.binding,reason:this.binding?'held-local-fit':'confirming-fit'};return false;}
+  this.binding ||= {local:new Vector3(),view:key};
+  const step=local.clone().sub(this.binding.local).multiplyScalar(1-Math.exp(-dt*3));
+  if(step.length()>.4*dt)step.setLength(.4*dt);
+  this.binding.local.add(step);
+  this.diagnostic={used:true,reason:'local-fit',local:this.binding.local.toArray(),distance:result.distance};
+  return true;
  }
  apply(pose,time,view,mirror=false){
-  const c=this.correction;
-  if(!pose||!c||time<c.time||time-c.time>140||c.view!==[view.width,view.height,view.videoWidth,view.videoHeight,mirror].join(':'))return pose;
-  return {...pose,position:pose.position.clone().add(c.delta)};
+  const b=this.binding;
+  if(!pose||!b||time<this.lastTime||time-this.lastHand>1200||b.view!==[view.width,view.height,view.videoWidth,view.videoHeight,mirror].join(':'))return pose;
+  const delta=b.local.clone().multiplyScalar(pose.wristRadius/(.65*.46)).applyQuaternion(pose.rotation);
+  // This is an offset in the existing hand frame, not a second rotation or a
+  // predicted pose. The caller still owns pose expiry and rotation validity.
+  return {...pose,position:pose.position.clone().add(delta)};
  }
 }
