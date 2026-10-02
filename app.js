@@ -12,7 +12,7 @@ import { makeSampleWatch, disposeModel, inspectGLB, normalizeImportedWatch } fro
 import { WristRig, wristDimensions } from './wrist-rig.js?v=719';
 import { DiagnosticRecorder } from './diagnostic-recorder.js?v=711';
 
-import { FIT_CONTROLS, FitSettings, defaultFit } from './fit-settings.js?v=719';
+import { FIT_CONTROLS, FitSettings, defaultFit } from './fit-settings.js?v=105-defaults';
 import {HandWristCenter} from './hand-wrist-center.mjs?v=2';
 import {WristCenterClient} from './wrist-center-client.mjs?v=1';
 import {WristCenterContinuation} from './wrist-center-continuation.mjs?v=1';

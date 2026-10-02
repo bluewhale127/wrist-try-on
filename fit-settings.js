@@ -5,8 +5,8 @@ export const FIT_LIMITS = {
 };
 export const FIT_CONTROLS = Object.keys(FIT_LIMITS);
 export function defaultFit(engine = 'hand', model = 'sample') {
-  return { scale: model === 'datejust' ? 1 : engine === 'wrist' ? 1.2 : 1.35, offset: 0.5, rotation: 90,
-    'tilt-x': 0, 'tilt-y': 0, height: 0,
+  return { scale: model === 'datejust' ? 1.09 : engine === 'wrist' ? 1.2 : 1.35, offset: 0.5, rotation: 90,
+    'tilt-x': 0, 'tilt-y': 0, height: model === 'datejust' ? -0.21 : 0,
     'wrist-width': engine === 'wrist' ? 1 : 1.3,
     'wrist-depth': engine === 'wrist' ? 1 : 1.4, occlusion: true };
 }
