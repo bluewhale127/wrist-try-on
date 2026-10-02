@@ -8,8 +8,8 @@ import { RearPalmAxis } from './rear-axis.js?v=79';
 import { HandDetector } from './hand-detector.js?v=75';
 import { RearWristAssist, rearObservation } from './rear-assist.js?v=75';
 import { HandTarget } from './hand-target.js?v=73';
-import { makeSampleWatch, disposeModel, inspectGLB, normalizeImportedWatch } from './watch.js?v=106';
-import { WristRig, wristDimensions } from './wrist-rig.js?v=106';
+import { makeSampleWatch, disposeModel, inspectGLB, normalizeImportedWatch } from './watch.js?v=716';
+import { WristRig, wristDimensions } from './wrist-rig.js?v=719';
 import { DiagnosticRecorder } from './diagnostic-recorder.js?v=711';
 
 import { FIT_CONTROLS, FitSettings, defaultFit } from './fit-settings.js?v=719';
@@ -246,7 +246,7 @@ async function detect(time) {
       const fitted=trusted?wristCenter.apply(displayPose,completed,view,mirror):null;
       wristContinuation.update(fitted,centerData,view,time,completed,mirror,selected===null||!next?.calibration?.inFrame);
     }else wristContinuation.reset();
-    if($('model10-status'))$('model10-status').textContent=!centerEnabled()?'기존 손 관절 위치 사용':centerFailure?'손목 모델을 준비하지 못해 기존 위치를 사용합니다. 카메라를 다시 켜 주세요.':wristCenter.diagnostic.used?(wristCenter.diagnostic.reason==='local-fit'?'모델10.6 · 착용 위치 보정 중':'모델10.6 · 착용 위치 유지 중'):'모델10.6 · 손등에서 착용 위치 확인 중';
+    if($('model10-status'))$('model10-status').textContent=!centerEnabled()?'기존 손 관절 위치 사용':centerFailure?'손목 모델을 준비하지 못해 기존 위치를 사용합니다. 카메라를 다시 켜 주세요.':wristCenter.diagnostic.used?(wristCenter.diagnostic.reason==='local-fit'?'모델10.5 · 착용 위치 보정 중':'모델10.5 · 착용 위치 유지 중'):'모델10.5 · 손등에서 착용 위치 확인 중';
     if(assistEnabled){
       if(accepted && tracker.orientationSign && tracker.diagnostics.quality>=.65 && tracker.diagnostics.disagreement<.75)rearAssist.correct(displayPose,time);
       else if(accepted){rearAssist.reset();rearAssist.diagnostics={state:'hand',reason:'uncertain-anchor'};}
@@ -304,7 +304,7 @@ function render(time) {
     anchor.visible = true;
     anchor.position.set(0, 2, 0);
     const baseSize = Math.min(width * 0.49, height * 0.35);
-    anchor.fit({ ...wristDimensions(baseSize / 0.65, values['wrist-width'], values['wrist-depth']), caseSize: baseSize * values.scale, height: values.height, sample: !!watch.userData.sample, guide: $('wrist-guide').checked, wristPivot: watch.userData.wristPivot });
+    anchor.fit({ ...wristDimensions(baseSize / 0.65, values['wrist-width'], values['wrist-depth']), caseSize: baseSize * values.scale, height: values.height, sample: !!watch.userData.sample, guide: $('wrist-guide').checked });
     anchor.rotation.set(0.2, reduceMotion ? -0.25 : Math.sin(time * 0.0003) * 0.25 - 0.15, -0.08);
     occluder.visible = false;
   } else {
@@ -334,7 +334,7 @@ function render(time) {
       anchor.quaternion.copy(handPose.rotation);
       anchor.position.copy(fitted.position);
       if(sourceTransition){const t=Math.min(1,(time-sourceTransition.time)/180);anchor.position.lerpVectors(sourceTransition.position,anchor.position,t);anchor.quaternion.slerpQuaternions(sourceTransition.rotation,handPose.rotation,t);if(t===1)sourceTransition=null;}
-      anchor.fit({ ...wristDimensions(renderRadius / (0.65 * 0.46), values['wrist-width'], values['wrist-depth']), caseSize: renderSize, height: values.height, sample: !!watch.userData.sample, guide: $('wrist-guide').checked, wristPivot: watch.userData.wristPivot });
+      anchor.fit({ ...wristDimensions(renderRadius / (0.65 * 0.46), values['wrist-width'], values['wrist-depth']), caseSize: renderSize, height: values.height, sample: !!watch.userData.sample, guide: $('wrist-guide').checked });
       if(centerOnly){$('tracking-label').textContent='손목 중심 추적 · 방향·크기 유지 중';$('model10-status').textContent='손목 중심으로 위치를 이어갑니다. 회전하거나 거리가 바뀌면 손을 다시 보여 주세요.';}
       poseInitialized = true;
     } else {poseInitialized = false;renderSource=null;sourceTransition=null;
@@ -348,7 +348,6 @@ function render(time) {
     diagnosticRecorder.recordRender({ time, mode, operation, watchVisible, inferenceTime: debugFrame?.time ?? null,
       centerApplied:watchVisible&&centerApplied,
       trackingSource:watchVisible?renderSource:null,
-      modelWristPivot:watch.userData.wristPivot || null,caseMountOffset:watchVisible?adjustment.position.toArray():null,
       sizeLocked:!!$('lock-size')?.checked,caseSize:watchVisible?renderSize:null,wristRadius:watchVisible?renderRadius:null,
       orientationSign: tracker.orientationSign, state: tracker.diagnostics.state, mirror,
       anchorRotation: watchVisible ? anchor.quaternion.toArray() : null,
@@ -406,12 +405,12 @@ async function importModel(file, profileKey) {
     loader = new GLTFLoader(manager).setDRACOLoader(draco);
     const gltf = await loader.parseAsync(buffer, ''); loaded = gltf.scene;
     if (id !== modelOperation) { disposeModel(loaded); loaded = null; return; }
-    const normalized = normalizeImportedWatch(loaded, { wristLoopName: profileKey === 'datejust' ? '@bra-U-12' : undefined });
+    const normalized = normalizeImportedWatch(loaded);
     replaceModel(normalized); loaded = null;
     modelKey = profileKey || 'glb:' + file.name + ':' + file.size; applyFit(fitSettings.load(engine, modelKey));
     $('model-name').textContent = file.name.replace(/\.glb$/i, '');
     $('model-caption').textContent = `${(file.size / 1024 / 1024).toFixed(1)} MB · 내 시계 모델`;
-    $('model-status').textContent = normalized.userData.wristPivot ? '스트랩 고리 중심을 손목 회전 중심에 맞췄습니다. 원본 GLB 형태를 유지합니다.' : normalized.userData.caseAnchored ? '케이스 중심·뒷면 기준으로 불러왔습니다. 스트랩은 모델의 고정된 형태이며 손목에 맞게 자동으로 휘어지지는 않습니다.' : '불러왔습니다. 손목 모형으로 위치를 맞출 수 있어요. GLB의 스트랩 형태는 그대로 유지됩니다.';
+    $('model-status').textContent = normalized.userData.caseAnchored ? '케이스 중심·뒷면 기준으로 불러왔습니다. 스트랩은 모델의 고정된 형태이며 손목에 맞게 자동으로 휘어지지는 않습니다.' : '불러왔습니다. 손목 모형으로 위치를 맞출 수 있어요. GLB의 스트랩 형태는 그대로 유지됩니다.';
   } catch (error) {
     if (loaded) disposeModel(loaded);
     if (id === modelOperation) $('model-status').textContent = error.message || '모델을 불러오지 못했습니다. GLB 내보내기 설정을 확인해 주세요.';

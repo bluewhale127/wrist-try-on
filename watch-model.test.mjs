@@ -35,23 +35,3 @@ test('invalid anchor metadata falls back without invalid transforms',()=>{
   }
 });
 test('empty imported scenes are rejected',()=>assert.throws(()=>normalizeImportedWatch(new Group()),/크기/));
-
-
-test('known rigid bracelet supplies a separate normalized pivot without changing its geometry',()=>{
-  const {scene,caseMesh}=watch();scene.userData.wristAR={version:1,caseWidth:.041,contact:[0,0,0]};
-  const loop=new Group();loop.name='closed-loop';
-  const band=new Mesh(new BoxGeometry(.02,.08,.06),new MeshBasicMaterial());band.position.set(.002,-.003,-.03);loop.add(band);scene.add(loop);
-  const vertices=band.geometry.attributes.position.array.slice();
-  const root=normalizeImportedWatch(scene,{wristLoopName:'closed-loop'});
-  const expected=new Vector3(.002,-.003,-.03).divideScalar(.041);
-  assert.ok(new Vector3().fromArray(root.userData.wristPivot).distanceTo(expected)<1e-6);
-  assert.deepEqual(band.geometry.attributes.position.array,vertices);
-  assert.ok(Math.abs(new Box3().setFromObject(caseMesh).min.z)<1e-6);
-});
-
-test('unknown or unspecified bracelet keeps the case-contact mount',()=>{
-  for(const options of [{},{wristLoopName:'missing'}]){
-    const {scene}=watch();scene.userData.wristAR={version:1,caseWidth:.041,contact:[0,0,0]};
-    assert.equal(normalizeImportedWatch(scene,options).userData.wristPivot,undefined);
-  }
-});

@@ -59,7 +59,7 @@ export function disposeModel(root) {
   for (const g of geometries) g.dispose();
 }
 
-export function normalizeImportedWatch(loaded, { wristLoopName } = {}) {
+export function normalizeImportedWatch(loaded) {
   const bounds = new THREE.Box3().setFromObject(loaded);
   const size = bounds.getSize(new THREE.Vector3()), center = bounds.getCenter(new THREE.Vector3());
   if (bounds.isEmpty() || size.x < 1e-8 || !Number.isFinite(size.length())) throw new Error('크기를 확인할 수 없는 모델입니다. 메시가 포함되어 있는지 확인해 주세요.');
@@ -76,18 +76,6 @@ export function normalizeImportedWatch(loaded, { wristLoopName } = {}) {
   const normalized = new THREE.Group();
   normalized.scale.setScalar(1 / (anchored ? reference.caseWidth : size.x));
   normalized.add(loaded); normalized.userData.caseAnchored = !!anchored;
-  // Only a caller with a known closed bracelet identifies its loop. Keep the
-  // authored geometry/contact intact; this point is a separate rotation pivot
-  // in normalized case-width units. Case/crown bounds must not bias it.
-  const loop = wristLoopName && loaded.getObjectByName(wristLoopName);
-  if (anchored && loop) {
-    normalized.updateMatrixWorld(true);
-    const loopBounds = new THREE.Box3().setFromObject(loop, true);
-    const pivot = loopBounds.getCenter(new THREE.Vector3());
-    if (!loopBounds.isEmpty() && pivot.toArray().every(Number.isFinite)) {
-      normalized.userData.wristPivot = pivot.toArray();
-    }
-  }
   return normalized;
 }
 
