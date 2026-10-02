@@ -17,6 +17,8 @@ import {HandWristCenter} from './hand-wrist-center.mjs?v=2';
 import {WristCenterClient} from './wrist-center-client.mjs?v=1';
 import {WristCenterContinuation} from './wrist-center-continuation.mjs?v=1';
 import {DatejustBracelet} from './datejust-bracelet.mjs?v=1';
+import {WatchSizeLock} from './watch-size-lock.mjs?v=1';
+import {WristRollCorrection} from './wrist-roll-correction.mjs?v=1';
 
 const $ = id => document.getElementById(id);
 const video = $('camera'), stage = $('stage'), status = $('status'), errorBox = $('error');
@@ -34,7 +36,10 @@ const rearAssist = new RearWristAssist();
 const rearAxis = new RearPalmAxis();
 const wristCenter = new HandWristCenter();
 const wristContinuation=new WristCenterContinuation();
+const watchSizeLock=new WatchSizeLock();
+const wristRoll=new WristRollCorrection();
 let renderSource=null,sourceTransition=null;
+let rollDisplay=null;
 let centerClient=null,centerFailure='';
 const centerEnabled=()=>!!$('model10-center')?.checked;
 const continuationEnabled=()=>centerEnabled()&&!!$('wrist-continue')?.checked;
@@ -122,7 +127,7 @@ function updateMode(next) {
   $('camera-label').textContent = next === 'idle' ? '카메라 꺼짐' : next === 'loading' ? '준비 중' : mirror ? '전면 카메라' : '후면 카메라';
   $('tracking-label').textContent = next === 'idle' ? '3D 미리보기 · 카메라 꺼짐' : next === 'loading' ? '손 추적을 준비하고 있어요' : '손등과 손가락, 손목을 보여 주세요';
   $('fps').textContent = '';
-  tracker.reset(); wristCenter.reset();wristContinuation.reset();renderSource=null;sourceTransition=null; rearAxis.reset(); handTarget.reset(); rearAssist.reset(); poseInitialized = false;
+  tracker.reset();watchSizeLock.reset();wristRoll.reset();rollDisplay=null; wristCenter.reset();wristContinuation.reset();renderSource=null;sourceTransition=null; rearAxis.reset(); handTarget.reset(); rearAssist.reset(); poseInitialized = false;
   $('rear-assist').disabled = next === 'loading' || (next === 'live' && mirror);
   $('rear-axis').disabled = next === 'loading' || (next === 'live' && mirror);
   debugFrame = null; debugContext.clearRect(0, 0, width, height);
@@ -234,9 +239,11 @@ async function detect(time) {
     const next = estimateWristPose(landmarks, view, { mirror, offset: values.offset, scale: values.scale, worldLandmarks });
     const observation = assistEnabled ? rearObservation(next, landmarks, tracker, visual) : {allowed:true};
     const accepted = tracker.update(observation.allowed ? next : null, time);
-    const displayPose = accepted && tracker.orientationSign && rearAxisEnabled()
+    let displayPose = accepted && tracker.orientationSign && rearAxisEnabled()
       ? rearAxis.update(tracker.pose, next, tracker.template, time) : tracker.pose;
     if (!accepted) rearAxis.interrupt();
+    if(accepted&&tracker.orientationSign&&$('side-fit')?.checked)displayPose=wristRoll.update(displayPose,next,time,{orientationSign:tracker.orientationSign,quality:tracker.diagnostics.quality,mirror});
+    if(accepted)rollDisplay={pose:displayPose,time};
     if(centerEnabled()&&accepted&&tracker.orientationSign){
       wristCenter.update({...displayPose,imagePalm:next.imagePalm},centerData,view,values,time,completed,mirror,{...tracker.diagnostics,moving:tracker.speed>.3||tracker.angularSpeed>.35});
     }else if(centerEnabled())wristCenter.update(null,null,view,values,time,completed,mirror);
@@ -245,7 +252,7 @@ async function detect(time) {
       const fitted=trusted?wristCenter.apply(displayPose,completed,view,mirror):null;
       wristContinuation.update(fitted,centerData,view,time,completed,mirror,selected===null||!next?.calibration?.inFrame);
     }else wristContinuation.reset();
-    if($('model10-status'))$('model10-status').textContent=!centerEnabled()?'기존 손 관절 위치 사용':centerFailure?'손목 모델을 준비하지 못해 기존 위치를 사용합니다. 카메라를 다시 켜 주세요.':wristCenter.diagnostic.used?(wristCenter.diagnostic.reason==='local-fit'?'모델10.2 · 착용 위치 보정 중':'모델10.2 · 착용 위치 유지 중'):'모델10.2 · 손등에서 착용 위치 확인 중';
+    if($('model10-status'))$('model10-status').textContent=!centerEnabled()?'기존 손 관절 위치 사용':centerFailure?'손목 모델을 준비하지 못해 기존 위치를 사용합니다. 카메라를 다시 켜 주세요.':wristCenter.diagnostic.used?(wristCenter.diagnostic.reason==='local-fit'?'모델10.3 · 착용 위치 보정 중':'모델10.3 · 착용 위치 유지 중'):'모델10.3 · 손등에서 착용 위치 확인 중';
     if(assistEnabled){
       if(accepted && tracker.orientationSign && tracker.diagnostics.quality>=.65 && tracker.diagnostics.disagreement<.75)rearAssist.correct(displayPose,time);
       else if(accepted){rearAssist.reset();rearAssist.diagnostics={state:'hand',reason:'uncertain-anchor'};}
@@ -278,7 +285,7 @@ async function detect(time) {
         view:{width,height,videoWidth:video.videoWidth,videoHeight:video.videoHeight}, mirror, fit:values,
         landmarks,worldLandmarks,calibration:next?.calibration,handedness:selected === null ? null : result.handedness?.[selected],
         centerMode:centerEnabled()?'hybrid10':'legacy',centerMeasurement:centerData?{pose:centerData.pose,width:centerData.width,height:centerData.height,time:centerData.time,inferenceMs:centerData.inferenceMs}:null,centerFusion:wristCenter.diagnostic,
-        wristContinuation:wristContinuation.diagnostic,
+        wristContinuation:wristContinuation.diagnostic,wristRoll:wristRoll.diagnostic,
         target:{state:handTarget.state,index:selected,detected:result.landmarks?.length || 0},
         diagnostic:tracker.diagnostics, orientationSign:tracker.orientationSign, watchOrientationSign:tracker.watchOrientationSign,
         template:tracker.template?.map(p=>p.toArray()), selectedRotation:tracker.previousRotation?.toArray(), rotationVelocity:tracker.rotationVelocity.toArray(),
@@ -309,7 +316,7 @@ function render(time) {
   } else {
     const trackedPose = tracker.sample(time);
     const legacyPose = (rearEnabled() ? rearAssist.sample(time) : null) ||
-      (trackedPose && rearAxisEnabled() ? rearAxis.sample(time) || trackedPose : trackedPose);
+      (trackedPose && rollDisplay && time-rollDisplay.time<=220 ? rollDisplay.pose : trackedPose && rearAxisEnabled() ? rearAxis.sample(time) || trackedPose : trackedPose);
     const view={width,height,videoWidth:video.videoWidth,videoHeight:video.videoHeight};
     const centerPose=continuationEnabled()?wristContinuation.sample(time,view,mirror):null;
     const handPose=legacyPose||centerPose,centerOnly=!!handPose&&!legacyPose;
@@ -321,12 +328,13 @@ function render(time) {
       renderSource=source;
       const alpha = poseInitialized ? smoothingAlpha(dt, 40) : 1;
       renderCenter.lerp(handPose.position, alpha);
-      renderRadius += (handPose.wristRadius - renderRadius) * alpha;
-      renderSize += (handPose.size - renderSize) * alpha;
+      const dimensions=$('lock-size')?.checked?watchSizeLock.dimensions(handPose,values.scale):handPose;
+      renderRadius += (dimensions.wristRadius - renderRadius) * alpha;
+      renderSize += (dimensions.size - renderSize) * alpha;
       // Smooth the underlying hand once, then rotate its wearing offset with
       // the very same quaternion/radius used by this render. Do not lag the
       // offset in screen space behind a newer rotation.
-      const renderedHand={...handPose,position:renderCenter,wristRadius:renderRadius};
+      const renderedHand={...handPose,position:renderCenter};
       const fitted=centerEnabled()&&!centerOnly?wristCenter.apply(renderedHand,time,view,mirror):renderedHand;
       centerApplied=fitted!==renderedHand;
       anchor.quaternion.copy(handPose.rotation);
@@ -348,6 +356,7 @@ function render(time) {
     diagnosticRecorder.recordRender({ time, mode, operation, watchVisible, inferenceTime: debugFrame?.time ?? null,
       centerApplied:watchVisible&&centerApplied,
       trackingSource:watchVisible?renderSource:null,braceletFitted:!!bracelet?.enabled,
+      sizeLocked:!!$('lock-size')?.checked,caseSize:watchVisible?renderSize:null,wristRadius:watchVisible?renderRadius:null,
       orientationSign: tracker.orientationSign, state: tracker.diagnostics.state, mirror,
       anchorRotation: watchVisible ? anchor.quaternion.toArray() : null,
       caseWorldRotation: watchVisible ? adjustment.getWorldQuaternion(renderedCaseRotation).toArray() : null,
@@ -453,7 +462,7 @@ try {
     renderer.setSize(width, height, false);
     debugCanvas.width = Math.round(width); debugCanvas.height = Math.round(height);
     camera.left = -width / 2; camera.right = width / 2; camera.top = height / 2; camera.bottom = -height / 2; camera.updateProjectionMatrix();
-    tracker.reset(); wristCenter.reset();wristContinuation.reset();renderSource=null;sourceTransition=null; rearAxis.reset(); rearAssist.reset(); poseInitialized = false;
+    tracker.reset();watchSizeLock.reset();wristRoll.reset();rollDisplay=null; wristCenter.reset();wristContinuation.reset();renderSource=null;sourceTransition=null; rearAxis.reset(); rearAssist.reset(); poseInitialized = false;
   }).observe(stage);
   animationId = requestAnimationFrame(render);
 } catch (error) {
@@ -464,7 +473,7 @@ applyFit(fitSettings.load(engine, modelKey));
 for (const id of controls) $(id).addEventListener('input', () => { rearAssist.reset(); rearAxis.reset(); updateFit(); saveFit(); });
 $('rear-assist').addEventListener('change',()=>{
   diagnosticEvent('tracking-reset', { reason: 'rear-assist-setting' });
-  operation++;rearAssist.reset();tracker.reset(); wristCenter.reset();wristContinuation.reset();renderSource=null;sourceTransition=null; rearAxis.reset();handTarget.reset();poseInitialized=false;
+  operation++;rearAssist.reset();tracker.reset();watchSizeLock.reset();wristRoll.reset();rollDisplay=null; wristCenter.reset();wristContinuation.reset();renderSource=null;sourceTransition=null; rearAxis.reset();handTarget.reset();poseInitialized=false;
   notice('후면 추적 설정을 바꿨어요. 손등과 손가락을 보여 기준을 다시 맞춰 주세요.');
 });
 $('occlusion').addEventListener('change', saveFit);
@@ -474,13 +483,13 @@ $('align-dial').addEventListener('click', () => {
   diagnosticEvent('tracking-reset', { reason: 'align-dial' });
   $('rotation').value = 90; $('tilt-x').value = 0; $('tilt-y').value = 0;
   updateFit(); saveFit();
-  if (mode === 'live') { operation++; tracker.reset(); wristCenter.reset();wristContinuation.reset();renderSource=null;sourceTransition=null; rearAxis.reset(); handTarget.reset(); rearAssist.reset(); poseInitialized = false; }
+  if (mode === 'live') { operation++; tracker.reset();watchSizeLock.reset();wristRoll.reset();rollDisplay=null; wristCenter.reset();wristContinuation.reset();renderSource=null;sourceTransition=null; rearAxis.reset(); handTarget.reset(); rearAssist.reset(); poseInitialized = false; }
   notice('6시는 엄지, 12시는 새끼손가락 쪽으로 맞춥니다. 카메라에 손등과 손가락을 펴고 약 2초 동안 움직이지 않고 유지해 주세요.');
 });
 $('calibrate').addEventListener('click', () => {
   diagnosticEvent('tracking-reset', { reason: 'calibrate-button' });
   operation++;
-  tracker.reset(); wristCenter.reset();wristContinuation.reset();renderSource=null;sourceTransition=null; rearAxis.reset(); handTarget.reset(); rearAssist.reset(); poseInitialized = false;
+  tracker.reset();watchSizeLock.reset();wristRoll.reset();rollDisplay=null; wristCenter.reset();wristContinuation.reset();renderSource=null;sourceTransition=null; rearAxis.reset(); handTarget.reset(); rearAssist.reset(); poseInitialized = false;
   notice('손등과 손가락을 카메라 쪽으로 펴고 약 2초 동안 움직이지 않고 유지해 주세요. 손의 기준 형태와 회전을 다시 맞춥니다.');
 });
 $('record-diagnostics').addEventListener('click', () => {
@@ -512,6 +521,8 @@ $('sample').addEventListener('click', () => {
 document.addEventListener('visibilitychange', () => { if (document.hidden && mode !== 'idle') stopCamera('다른 화면으로 이동해 카메라를 껐습니다. 다시 시작하려면 카메라 시작을 눌러 주세요.'); });
 window.addEventListener('pagehide', () => { stopCamera(); });
 
+$('side-fit')?.addEventListener('change',()=>{wristRoll.reset();rollDisplay=null;});
+$('lock-size')?.addEventListener('change',()=>watchSizeLock.reset());
 $('wrist-continue')?.addEventListener('change',()=>{wristContinuation.reset();sourceTransition=null;});
 $('model10-center')?.addEventListener('change',()=>{
   wristCenter.reset();wristContinuation.reset();renderSource=null;sourceTransition=null;diagnosticEvent('center-mode',{enabled:centerEnabled()});

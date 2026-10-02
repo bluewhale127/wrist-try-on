@@ -5,13 +5,13 @@
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
   <meta name="theme-color" content="#101619">
   <meta name="description" content="카메라로 손목을 비추고 나만의 3D 시계를 착용해 보세요.">
-  <title>모델10.2 · 손목 중심 + 기존 GLB 추적</title>
+  <title>모델10.3 · 손목 중심 + 기존 GLB 추적</title>
   <link rel="stylesheet" href="./style.css?v=717">
   <script type="importmap">{"imports":{"three":"./vendor/three/three.module.js","three/addons/":"./vendor/three/addons/"}}</script>
 </head>
 <body>
   <main class="app">
-    <header class="header"><div><span class="eyebrow">WRIST / STUDIO</span><h1>손목 위의 시계</h1></div><span class="badge">모델10.2 · 결합 실험</span></header>
+    <header class="header"><div><span class="eyebrow">WRIST / STUDIO</span><h1>손목 위의 시계</h1></div><span class="badge">모델10.3 · 결합 실험</span></header>
     <div class="workspace">
       <section class="viewer" aria-label="시계 착용 화면">
         <div id="stage" class="stage">
@@ -23,7 +23,7 @@
           <div class="stage-bottom"><span id="tracking-label">시계 모델을 먼저 살펴보세요</span><span id="fps" aria-hidden="true"></span></div>
         </div>
         <div class="camera-actions"><button id="start" class="primary" type="button">카메라 시작</button><button id="switch" class="secondary" type="button" disabled>카메라 전환</button></div>
-        <label class="check-label"><input id="model10-center" type="checkbox" checked>모델10.2 착용 위치 보정</label><p id="model10-status" class="small">손등 또는 주먹의 등을 약 3초간 보여 주세요. 착용 위치를 확인한 뒤 손과 함께 회전합니다. 체크를 끄면 기존 위치 계산과 비교할 수 있어요.</p><label class="check-label"><input id="wrist-continue" type="checkbox" checked>손목만 보일 때 이어가기</label><p class="small">손을 한 번 인식한 뒤 손목 중심으로 이어갑니다. 이때 방향·크기는 마지막 값을 유지하므로, 팔을 돌리거나 거리가 바뀌면 손을 다시 보여 주세요.</p><label class="check-label"><input id="bracelet-fit" type="checkbox" checked>Datejust 스트랩 손목 맞춤 · 실험</label><div class="quick-fit"><label class="slider-label" for="scale">시계 크기 <output id="scale-output">100%</output></label><input id="scale" type="range" min="0.3" max="2" step="0.01" value="1" aria-describedby="scale-help"><p id="scale-help" class="small">작게 ← → 크게 · 조절한 크기는 이 모델에 저장돼요.</p></div>
+        <label class="check-label"><input id="model10-center" type="checkbox" checked>모델10.3 착용 위치 보정</label><p id="model10-status" class="small">손등 또는 주먹의 등을 약 3초간 보여 주세요. 착용 위치를 확인한 뒤 손과 함께 회전합니다. 체크를 끄면 기존 위치 계산과 비교할 수 있어요.</p><label class="check-label"><input id="wrist-continue" type="checkbox" checked>손목만 보일 때 이어가기</label><p class="small">손을 한 번 인식한 뒤 손목 중심으로 이어갑니다. 이때 방향·크기는 마지막 값을 유지하므로, 팔을 돌리거나 거리가 바뀌면 손을 다시 보여 주세요.</p><label class="check-label"><input id="bracelet-fit" type="checkbox" checked>Datejust 스트랩 손목 맞춤 · 실험</label><label class="check-label"><input id="side-fit" type="checkbox" checked>옆면 회전 보정</label><label class="check-label"><input id="lock-size" type="checkbox" checked>처음 맞춘 크기 유지</label><p class="small">손목 움직임에 따라 자동 확대·축소하지 않습니다. 크기 슬라이더로 직접 맞추거나, 손등 기준 맞추기로 다시 측정할 수 있습니다.</p><div class="quick-fit"><label class="slider-label" for="scale">시계 크기 <output id="scale-output">100%</output></label><input id="scale" type="range" min="0.3" max="2" step="0.01" value="1" aria-describedby="scale-help"><p id="scale-help" class="small">작게 ← → 크게 · 조절한 크기는 이 모델에 저장돼요.</p></div>
         <label class="check-label"><input id="rear-assist" type="checkbox" checked>후면 근접·움직임 보조 <span>시험 적용</span></label>
         <p class="small">손을 놓쳐도 손목 영상이 확인되면 최대 1초 이어갑니다. 큰 기울기·가림에서는 이어가지 못할 수 있으며, 전면에는 적용하지 않습니다.</p>
         <button id="calibrate" class="text-button" type="button" disabled>손등 기준 맞추기</button>
@@ -64,6 +64,6 @@
     </div>
     <footer>Wrist Studio 0.7.19 · Android Chrome 기준 · 영상은 기기 안에서 처리됩니다</footer>
   </main>
-  <script type="module" src="./app.js?v=hybrid10-3"></script>
+  <script type="module" src="./app.js?v=hybrid10-4"></script>
 </body>
 </html>
