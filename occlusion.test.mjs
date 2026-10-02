@@ -54,3 +54,30 @@ test('restoring wrist coverage preserves case contact and independent wrist sizi
   assert.ok(rig.occluder.scale.equals(scale));
   assert.ok(rig.guide.scale.equals(scale));
 });
+
+
+test('rigid bracelet center stays on the wrist axis through full rolls, model adjustments and sizing',()=>{
+  const rig=new WristRig(),pivot=[.001,-.033,-.535];rig.position.set(23,-17,4);
+  for(const roll of [0,Math.PI/2,Math.PI,Math.PI*1.5,Math.PI*2]){
+    rig.rotation.set(.2,roll,-.8);
+    for(const tilt of [0,.6])for(const size of [35,65,90]){
+      rig.caseMount.rotation.set(.1,tilt,Math.PI/2,'ZYX');
+      rig.fit({...dimensions,caseSize:size,wristPivot:pivot});rig.updateMatrixWorld(true);
+      const center=rig.caseMount.localToWorld(new Vector3().fromArray(pivot));
+      assert.ok(center.distanceTo(rig.position)<1e-9);
+      assert.deepEqual(rig.occluder.scale.toArray(),[dimensions.radiusX,dimensions.length,dimensions.radiusZ]);
+    }
+  }
+});
+
+test('manual lift offsets a centered bracelet, and switching models restores case-contact mounting',()=>{
+  const rig=new WristRig(),pivot=[0,-.03,-.53];rig.caseMount.rotation.z=Math.PI/2;
+  rig.fit({...dimensions,caseSize:65,wristPivot:pivot,height:.1});rig.updateMatrixWorld(true);
+  assert.ok(rig.caseMount.localToWorld(new Vector3().fromArray(pivot)).distanceTo(new Vector3(0,0,6.5))<1e-9);
+  for(const invalid of [null,[NaN,0,0],[0,0]]){
+    rig.fit({...dimensions,caseSize:65,wristPivot:invalid});
+    assert.deepEqual(rig.caseMount.position.toArray(),[0,0,dimensions.radiusZ]);
+  }
+  rig.fit({...dimensions,caseSize:65,wristPivot:pivot,sample:true});
+  assert.deepEqual(rig.caseMount.position.toArray(),[0,0,dimensions.radiusZ]);
+});

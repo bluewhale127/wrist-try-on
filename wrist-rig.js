@@ -87,10 +87,18 @@ export class WristRig extends THREE.Group {
     this.add(this.occluder, this.caseMount, this.strap, this.guide);
     this.lastFit = null;
   }
-  fit({ radiusX, radiusZ, length, caseSize, height = 0, sample = false, guide = false }) {
+  fit({ radiusX, radiusZ, length, caseSize, height = 0, sample = false, guide = false, wristPivot = null }) {
     this.occluder.scale.set(radiusX, length, radiusZ);
     this.guide.scale.copy(this.occluder.scale); this.guide.visible = guide;
-    this.caseMount.position.z = radiusZ + height * caseSize;
+    // Center a rigid, authored bracelet on the tracked wrist axis. Rotating
+    // the case adjustment must rotate the pivot compensation as well, so the
+    // complete loop does not orbit the wrist. No vertex deformation or clamp.
+    if (!sample && Array.isArray(wristPivot) && wristPivot.length === 3 && wristPivot.every(Number.isFinite)) {
+      this.caseMount.position.fromArray(wristPivot).applyQuaternion(this.caseMount.quaternion).multiplyScalar(-caseSize);
+      this.caseMount.position.z += height * caseSize;
+    } else {
+      this.caseMount.position.set(0, 0, radiusZ + height * caseSize);
+    }
     this.caseMount.scale.setScalar(caseSize);
     this.strap.visible = sample;
     // Work in units of wrist width, keeping vertex coordinates fixed during
